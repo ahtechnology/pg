@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="hu">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <title>PlaceGuess</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <main class="auth-page" aria-label="Bejelentkezés">
+        <form id="login-form" class="auth-card">
+            <h1>PlaceGuess (alpha)</h1>
+
+            <label for="username">Felhasználónév</label>
+            <input id="username" name="username" type="text" required autocomplete="username">
+
+            <label for="password">Jelszó</label>
+            <input id="password" name="password" type="password" required autocomplete="current-password">
+
+            <button type="submit">Belépés</button>
+        </form>
+    </main>
+
+    <script src="app-config.js"></script>
+    <script src="app-utils.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script>
+        const supabaseClient = window.supabase.createClient(APP_CONFIG.supabaseUrl, APP_CONFIG.supabaseAnonKey);
+
+        // A bejelentkezési űrlap fontos elemei.
+        const loginForm = document.getElementById('login-form');
+        const usernameInput = document.getElementById('username');
+        const passwordInput = document.getElementById('password');
+
+        // Kiolvassa a korábban belépett normál felhasználók listáját.
+        function loadUsers() {
+            try {
+                const parsed = JSON.parse(localStorage.getItem(STORAGE_KEYS.users) || '[]');
+                return Array.isArray(parsed) ? parsed : [];
+            } catch {
+                return [];
+            }
+        }
+
+        // Elmenti a normál felhasználók listáját az admin nézet számára.
+        function saveUsers(users) {
+            localStorage.setItem(STORAGE_KEYS.users, JSON.stringify(users));
+        }
+
+        function isEmailLike(value) {
+            return value.includes('@');
+        }
+
+        function saveLocalUser(username) {
+            localStorage.setItem(STORAGE_KEYS.username, username);
+            localStorage.setItem(STORAGE_KEYS.authMode, 'local');
+            localStorage.removeItem(STORAGE_KEYS.supabaseUserId);
+        }
+
+        function rememberNormalUser(username) {
+            const users = loadUsers();
+
+            if (!users.includes(username)) {
+                users.push(username);
+                saveUsers(users);
+            }
+        }
+
+        async function signInWithSupabase(email, password) {
+            const { data, error } = await supabaseClient.auth.signInWithPassword({
+                email,
+                password
+            });
+
+            if (error || !data.user) {
+                alert('Sikertelen Supabase belépés. Ellenőrizd az email címet és a jelszót.');
+                return false;
+            }
+
+            localStorage.setItem(STORAGE_KEYS.username, data.user.email || email);
+            localStorage.setItem(STORAGE_KEYS.authMode, 'supabase');
+            localStorage.setItem(STORAGE_KEYS.supabaseUserId, data.user.id);
+            return true;
+        }
+
+        // Belépéskor eltároljuk az aktuális usert, majd admin vagy session oldalra irányítunk.
+        loginForm.addEventListener('submit', async (event) => {
+            event.preventDefault();
+
+            const username = usernameInput.value.trim();
+            const password = passwordInput.value;
+
+            if (!username || !password) {
+                return;
+            }
+
+            if (username.toLowerCase() === 'admin') {
+                saveLocalUser(username);
+                window.location.href = 'admin.html';
+                return;
+            }
+
+            if (!isEmailLike(username)) {
+                saveLocalUser(username);
+                rememberNormalUser(username);
+                window.location.href = 'sessions.html';
+                return;
+            }
+
+            const isSignedIn = await signInWithSupabase(username, password);
+
+            if (isSignedIn) {
+                if (isSupabaseAdminEmail(username)) {
+                    window.location.href = 'admin.html';
+                    return;
+                }
+
+                window.location.href = 'sessions.html';
+            }
+        });
+    </script>
+</body>
+</html>

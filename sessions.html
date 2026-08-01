@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="hu">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <title>PlaceGuess - Áttekintő</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <main class="sessions-page" aria-label="Session áttekintő">
+        <header class="sessions-header">
+            <h1>Áttekintő</h1>
+            <p id="sessions-user"></p>
+        </header>
+
+        <section id="sessions-grid" class="sessions-grid" aria-label="Session kártyák"></section>
+    </main>
+
+    <script src="app-config.js"></script>
+    <script src="app-utils.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script>
+        const supabaseClient = window.supabase.createClient(APP_CONFIG.supabaseUrl, APP_CONFIG.supabaseAnonKey);
+
+        // A dashboard gyakran használt DOM elemei.
+        const elements = {
+            sessionsUser: document.getElementById('sessions-user'),
+            sessionsGrid: document.getElementById('sessions-grid')
+        };
+
+        // Létrehozza az alap session-progress állapotot új felhasználó esetén.
+        function createDefaultProgress() {
+            const sessions = [];
+
+            for (let i = 1; i <= APP_CONFIG.totalSessions; i += 1) {
+                sessions.push({
+                    id: i,
+                    title: `Nap #${i}`,
+                    completedImages: 0,
+                    totalImages: APP_CONFIG.imagesPerSession,
+                    nextImageIndex: 1,
+                    status: 'not_started'
+                });
+            }
+
+            return { sessions };
+        }
+
+        // Betölti az aktuális felhasználó session állapotát, vagy létrehozza, ha még nincs.
+        function loadProgress() {
+            const progressKey = getProgressKey();
+            const raw = localStorage.getItem(progressKey);
+
+            if (!raw) {
+                const initial = createDefaultProgress();
+                localStorage.setItem(progressKey, JSON.stringify(initial));
+                return initial;
+            }
+
+            try {
+                const parsed = JSON.parse(raw);
+                if (!parsed || !Array.isArray(parsed.sessions)) {
+                    throw new Error('Invalid progress');
+                }
+                return parsed;
+            } catch {
+                const fallback = createDefaultProgress();
+                localStorage.setItem(progressKey, JSON.stringify(fallback));
+                return fallback;
+            }
+        }
+
+        // Elmenti az aktuális felhasználó session állapotát.
+        function saveProgress(progress) {
+            localStorage.setItem(getProgressKey(), JSON.stringify(progress));
+        }
+
+        function applyRowsToProgress(rows) {
+            const progress = createDefaultProgress();
+
+            progress.sessions.forEach((session) => {
+                const completedIndexes = new Set(
+                    rows
+                        .filter((row) => row.session_id === session.id)
+                        .map((row) => row.image_index)
+                );
+
+                session.completedImages = Math.min(session.totalImages, completedIndexes.size);
+
+                if (session.completedImages >= session.totalImages) {
+                    session.status = 'completed';
+                    session.nextImageIndex = 1;
+                    return;
+                }
+
+                session.status = session.completedImages > 0 ? 'in_progress' : 'not_started';
+
+                for (let imageIndex = 1; imageIndex <= session.totalImages; imageIndex += 1) {
+                    if (!completedIndexes.has(imageIndex)) {
+                        session.nextImageIndex = imageIndex;
+                        return;
+                    }
+                }
+            });
+
+            return progress;
+        }
+
+        async function loadSupabaseProgress() {
+            let query = supabaseClient
+                .from('heatmap_results')
+                .select('session_id, image_index');
+
+            const userId = getSupabaseUserId();
+            if (userId) {
+                query = query.eq('user_id', userId);
+            }
+
+            const { data, error } = await query;
+
+            if (error) {
+                console.error('SUPABASE_PROGRESS_LOAD_FAILED', error);
+                elements.sessionsGrid.textContent = 'A Supabase progress betöltése sikertelen.';
+                return createDefaultProgress();
+            }
+
+            return applyRowsToProgress(data || []);
+        }
+
+        async function loadProgressForCurrentMode() {
+            return isSupabaseMode() ? await loadSupabaseProgress() : loadProgress();
+        }
+
+        // Egy session resetelésekor törli az ahhoz tartozó mentett heatmap eredményeket is.
+        function deleteSessionResults(sessionId) {
+            const parsedIndex = readJson(getResultIndexKey(), []);
+            const index = Array.isArray(parsedIndex) ? parsedIndex : [];
+
+            const prefix = getResultPrefix(sessionId);
+            const remaining = [];
+
+            index.forEach((key) => {
+                if (key.startsWith(prefix)) {
+                    localStorage.removeItem(key);
+                } else {
+                    remaining.push(key);
+                }
+            });
+
+            localStorage.setItem(getResultIndexKey(), JSON.stringify(remaining));
+        }
+
+        // Visszaállít egy sessiont kezdő állapotba.
+        function resetSession(sessionId) {
+            const progress = loadProgress();
+            const session = progress.sessions.find((item) => item.id === sessionId);
+
+            if (!session) {
+                return;
+            }
+
+            session.completedImages = 0;
+            session.nextImageIndex = 1;
+            session.status = 'not_started';
+
+            localStorage.removeItem(getCurrentSessionIdKey());
+            localStorage.removeItem(getLaunchTokenKey());
+            deleteSessionResults(sessionId);
+            saveProgress(progress);
+            renderSessions();
+        }
+
+        // Emberileg olvasható magyar címkét ad a session státuszához.
+        function getStatusLabel(status) {
+            if (status === 'completed') {
+                return 'Kész';
+            }
+            if (status === 'in_progress') {
+                return 'Folyamatban';
+            }
+            return 'Nem kezdett';
+        }
+
+        // Megkeresi az első még nem kész sessiont; csak ez indítható.
+        function getCurrentSessionId(sessions) {
+            const next = sessions.find((session) => session.status !== 'completed');
+            return next ? next.id : null;
+        }
+
+        // Kirajzolja a session kártyákat, és beköti az indítás/reset gombokat.
+        async function renderSessions() {
+            const username = getUsername();
+            if (!username) {
+                window.location.href = 'index.html';
+                return;
+            }
+            const progress = await loadProgressForCurrentMode();
+
+            elements.sessionsUser.textContent = `Felhasználó: ${username}`;
+
+            elements.sessionsGrid.innerHTML = '';
+            const currentSessionId = getCurrentSessionId(progress.sessions);
+
+            progress.sessions.forEach((session) => {
+                const card = document.createElement('article');
+                card.className = 'session-card';
+                const isActive = session.id === currentSessionId;
+                const isSeparated = session.id >= APP_CONFIG.conditionSeparation;
+                const resetButtonHtml = isSupabaseMode()
+                    ? ''
+                    : '<button class="session-reset-button" type="button">Reset</button>';
+
+                if (isSeparated) {
+                    card.classList.add('session-card-separated');
+                }
+
+                if (!isActive) {
+                    card.classList.add('session-card-disabled');
+                }
+
+                const statusClass = `status-${session.status}`;
+                const startLabel = session.status === 'in_progress' ? 'Folytatás' : 'Indítás';
+
+                card.innerHTML = `
+                    <h2>${session.title}</h2>
+                    <p>${session.completedImages} / ${session.totalImages} kép kész</p>
+                    <p class="session-status ${statusClass}">${getStatusLabel(session.status)}</p>
+                    <div class="session-actions">
+                        <button class="session-start-button" type="button" ${isActive ? '' : 'disabled'}>${startLabel}</button>
+                        ${resetButtonHtml}
+                    </div>
+                `;
+
+                card.querySelector('.session-start-button').addEventListener('click', () => {
+                    if (!isActive) {
+                        return;
+                    }
+
+                    localStorage.setItem(getCurrentSessionIdKey(), String(session.id));
+                    localStorage.setItem(getLaunchTokenKey(), '1');
+                    window.location.href = 'guess.html';
+                });
+
+                const resetButton = card.querySelector('.session-reset-button');
+                if (resetButton) {
+                    resetButton.addEventListener('click', () => {
+                        resetSession(session.id);
+                    });
+                }
+
+                elements.sessionsGrid.appendChild(card);
+            });
+        }
+
+        renderSessions();
+    </script>
+</body>
+</html>

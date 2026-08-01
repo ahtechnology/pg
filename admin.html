@@ -1,0 +1,519 @@
+<!DOCTYPE html>
+<html lang="hu">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <title>PlaceGuess - Admin</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <main class="admin-page" aria-label="Admin dashboard">
+        <header class="admin-header">
+            <h1>Admin Dashboard</h1>
+            <p>Lokális tesztadatok áttekintése</p>
+        </header>
+
+        <section class="admin-panel" aria-label="Felhasználó választás">
+            <h2>Felhasználók</h2>
+            <div id="admin-users" class="admin-users"></div>
+        </section>
+
+        <section class="admin-panel" aria-label="Felhasználói állapot">
+            <h2 id="admin-selected-user">Nincs kiválasztott felhasználó</h2>
+            <div id="admin-progress" class="admin-progress"></div>
+        </section>
+
+        <section class="admin-panel" aria-label="Heatmap eredmények">
+            <h2>Heatmap eredmények</h2>
+            <div class="admin-download-actions">
+                <button id="admin-download-zip" class="admin-download-button" type="button" hidden>Képek letöltése (ZIP)</button>
+            </div>
+            <div id="admin-results" class="admin-results"></div>
+        </section>
+    </main>
+
+    <script src="app-config.js"></script>
+    <script src="app-utils.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script>
+        const supabaseClient = window.supabase.createClient(APP_CONFIG.supabaseUrl, APP_CONFIG.supabaseAnonKey);
+        const ANSWER_OPTIONS_PATH = 'assets/images/answer-options.json';
+
+        // Az admin oldal gyakran használt DOM elemei.
+        const elements = {
+            users: document.getElementById('admin-users'),
+            selectedUser: document.getElementById('admin-selected-user'),
+            progress: document.getElementById('admin-progress'),
+            results: document.getElementById('admin-results'),
+            downloadZip: document.getElementById('admin-download-zip')
+        };
+
+        let currentResults = [];
+        let allSupabaseResults = [];
+        let currentUsername = '';
+        let answerOptionsByImage = null;
+
+        async function loadAnswerOptionsMap() {
+            if (answerOptionsByImage) {
+                return answerOptionsByImage;
+            }
+
+            const response = await fetch(ANSWER_OPTIONS_PATH);
+            if (!response.ok) {
+                throw new Error('Answer options JSON not found');
+            }
+
+            answerOptionsByImage = await response.json();
+            return answerOptionsByImage;
+        }
+
+        function getAnswerOptionsKey(sessionId, imageIndex) {
+            const sessionFolder = String(sessionId).padStart(3, '0');
+            const keys = Object.keys(answerOptionsByImage)
+                .filter((key) => key.startsWith(`${sessionFolder}/`))
+                .sort();
+
+            return keys[imageIndex - 1];
+        }
+
+        function getImagePath(result) {
+            const sessionFolder = String(result.sessionId).padStart(3, '0');
+            const answerOptionsKey = getAnswerOptionsKey(result.sessionId, result.imageIndex);
+            const fileName = answerOptionsKey.split('/')[1];
+            return `assets/images/${sessionFolder}/${fileName}`;
+        }
+
+        function isSupabaseAdminMode() {
+            const authMode = localStorage.getItem(STORAGE_KEYS.authMode);
+            const username = (localStorage.getItem(STORAGE_KEYS.username) || '').toLowerCase();
+            return authMode === 'supabase' && username.startsWith(APP_CONFIG.adminEmailPrefix);
+        }
+
+        // Kiolvassa az eddig belépett normál felhasználók listáját.
+        function getUsers() {
+            const users = readJson(STORAGE_KEYS.users, []);
+            return Array.isArray(users) ? users.filter((user) => !user.includes('@')) : [];
+        }
+
+        function getSupabaseUsers() {
+            return [...new Set(allSupabaseResults.map((result) => result.username).filter(Boolean))].sort();
+        }
+
+        // Egy adott felhasználó session állapotát tölti be.
+        function getProgress(username) {
+            return readJson(`${STORAGE_KEYS.progressPrefix}:${username}`, null);
+        }
+
+        // Egy adott felhasználó összes mentett heatmap eredményét betölti és sorba rendezi.
+        function getResults(username) {
+            if (isSupabaseAdminMode()) {
+                return allSupabaseResults.filter((result) => result.username === username);
+            }
+
+            const index = readJson(`${STORAGE_KEYS.resultIndexPrefix}:${username}`, []);
+            if (!Array.isArray(index)) {
+                return [];
+            }
+
+            return index
+                .map((key) => readJson(key, null))
+                .filter(Boolean)
+                .sort((a, b) => (a.sessionId - b.sessionId) || (a.imageIndex - b.imageIndex));
+        }
+
+        function mapSupabaseResult(row) {
+            return {
+                username: row.username,
+                sessionId: row.session_id,
+                imageIndex: row.image_index,
+                image: row.image,
+                imageNaturalWidth: row.image_natural_width,
+                imageNaturalHeight: row.image_natural_height,
+                heatmapWidth: row.heatmap_width,
+                heatmapHeight: row.heatmap_height,
+                heatmapResolutionScale: row.heatmap_resolution_scale,
+                durationMs: row.duration_ms,
+                totalViewingTimeMs: row.total_viewing_time_ms,
+                totalRevealTimeMs: row.total_reveal_time_ms,
+                values: row.heatmap_values || [],
+                countryAnswer: row.country_answer,
+                confidence: row.confidence,
+                completedAt: row.completed_at,
+                answeredAt: row.answered_at
+            };
+        }
+
+        async function loadSupabaseResults() {
+            const { data, error } = await supabaseClient
+                .from('heatmap_results')
+                .select('*')
+                .order('username', { ascending: true })
+                .order('session_id', { ascending: true })
+                .order('image_index', { ascending: true });
+
+            if (error) {
+                elements.users.textContent = 'Supabase eredmények betöltése sikertelen.';
+                console.error('SUPABASE_ADMIN_LOAD_FAILED', error);
+                return;
+            }
+
+            allSupabaseResults = (data || []).map(mapSupabaseResult);
+        }
+
+        // Kirajzolja a felhasználóválasztó gombokat.
+        function renderUsers() {
+            const users = isSupabaseAdminMode() ? getSupabaseUsers() : getUsers();
+            elements.users.innerHTML = '';
+
+            if (users.length === 0) {
+                elements.users.textContent = isSupabaseAdminMode()
+                    ? 'Még nincs Supabase eredményadat.'
+                    : 'Még nincs lokális felhasználói adat.';
+                return;
+            }
+
+            users.forEach((username) => {
+                const button = document.createElement('button');
+                button.type = 'button';
+                button.textContent = username;
+                button.addEventListener('click', () => renderUserDetails(username));
+                elements.users.appendChild(button);
+            });
+        }
+
+        // Felhasználó kiválasztásakor frissíti a progress és eredmény nézetet.
+        function renderUserDetails(username) {
+            elements.selectedUser.textContent = `Felhasználó: ${username}`;
+            renderProgress(username);
+            renderResults(username);
+        }
+
+        // Kirajzolja a kiválasztott felhasználó session státuszait.
+        function renderProgress(username) {
+            if (isSupabaseAdminMode()) {
+                const results = getResults(username);
+                const completedBySession = new Map();
+
+                results.forEach((result) => {
+                    const current = completedBySession.get(result.sessionId) || 0;
+                    completedBySession.set(result.sessionId, current + 1);
+                });
+
+                elements.progress.innerHTML = '';
+
+                if (completedBySession.size === 0) {
+                    elements.progress.textContent = 'Nincs Supabase progress adat.';
+                    return;
+                }
+
+                [...completedBySession.entries()].sort((a, b) => a[0] - b[0]).forEach(([sessionId, count]) => {
+                    const item = document.createElement('div');
+                    item.className = 'admin-progress-item';
+                    item.textContent = `Session ${sessionId}: ${count} mentett kép`;
+                    elements.progress.appendChild(item);
+                });
+                return;
+            }
+
+            const progress = getProgress(username);
+            elements.progress.innerHTML = '';
+
+            if (!progress || !Array.isArray(progress.sessions)) {
+                elements.progress.textContent = 'Nincs progress adat.';
+                return;
+            }
+
+            progress.sessions.forEach((session) => {
+                const item = document.createElement('div');
+                item.className = 'admin-progress-item';
+                item.textContent = `${session.title}: ${session.completedImages} / ${session.totalImages} kép, státusz: ${session.status}`;
+                elements.progress.appendChild(item);
+            });
+        }
+
+        function getHeatmapScaleValue(rawValue, maxValue, scaleMode) {
+            if (scaleMode === 'absolute') {
+                return rawValue / APP_CONFIG.absoluteHeatmapMaxRevealTimeMs;
+            }
+
+            return maxValue > 0 ? rawValue / maxValue : 0;
+        }
+
+        function formatCountryAnswer(value) {
+            if (value === 1 || value === true) {
+                return 'helyes';
+            }
+
+            if (value === 0 || value === false) {
+                return 'helytelen';
+            }
+
+            return 'nincs válasz';
+        }
+
+        function getHeatmapColorScaleStyle() {
+            const width = 900;
+            const paddingLeft = 52;
+            const paddingRight = 16;
+            const plotWidth = width - paddingLeft - paddingRight;
+            const binCount = Math.ceil(APP_CONFIG.heatmapHistogramMaxValueMs / APP_CONFIG.heatmapHistogramBinWidthMs) + 1;
+            const barWidth = plotWidth / binCount;
+            const leftPercent = ((paddingLeft + barWidth) / width) * 100;
+            const widthPercent = ((plotWidth - barWidth) / width) * 100;
+            const parts = [];
+
+            for (let i = 0; i <= 20; i += 1) {
+                const percent = (i / 20) * 100;
+                const value = (i / 20) * APP_CONFIG.heatmapHistogramMaxValueMs;
+                const [r, g, b] = getHeatColor(value / APP_CONFIG.absoluteHeatmapMaxRevealTimeMs);
+                parts.push(`rgb(${r},${g},${b}) ${percent}%`);
+            }
+
+            return `margin-left: ${leftPercent}%; width: ${widthPercent}%; background: linear-gradient(to right, ${parts.join(', ')});`;
+        }
+
+        // A mentett heatmap értékeket átlátszó színes rétegként rajzolja a canvasra.
+        function drawHeatmapOverlay(ctx, width, height, result, scaleMode = 'normalized') {
+            const heatmapImageData = ctx.createImageData(width, height);
+            const pixels = heatmapImageData.data;
+            const values = result.values || [];
+            const maxValue = values.reduce((max, value) => Math.max(max, value), 0);
+
+            for (let py = 0; py < height; py += 1) {
+                const gy = Math.min(result.heatmapHeight - 1, Math.floor((py / height) * result.heatmapHeight));
+
+                for (let px = 0; px < width; px += 1) {
+                    const gx = Math.min(result.heatmapWidth - 1, Math.floor((px / width) * result.heatmapWidth));
+                    const rawValue = values[(gy * result.heatmapWidth) + gx] || 0;
+                    const idx = ((py * width) + px) * 4;
+
+                    if (rawValue > 0) {
+                        const [r, g, b] = getHeatColor(getHeatmapScaleValue(rawValue, maxValue, scaleMode));
+                        pixels[idx] = r;
+                        pixels[idx + 1] = g;
+                        pixels[idx + 2] = b;
+                        pixels[idx + 3] = APP_CONFIG.heatmapOverlayAlpha;
+                    }
+                }
+            }
+
+            const heatmapCanvas = document.createElement('canvas');
+            heatmapCanvas.width = width;
+            heatmapCanvas.height = height;
+            heatmapCanvas.getContext('2d').putImageData(heatmapImageData, 0, 0);
+            ctx.drawImage(heatmapCanvas, 0, 0);
+        }
+
+        // Létrehoz egy canvas képet, amin az eredeti kép és a heatmap már össze van olvasztva.
+        function createMergedCanvas(result, scaleMode = 'normalized') {
+            return new Promise((resolve, reject) => {
+                const width = result.imageNaturalWidth || 1280;
+                const height = result.imageNaturalHeight || 720;
+                const canvas = document.createElement('canvas');
+                const ctx = canvas.getContext('2d');
+                const image = new Image();
+
+                image.onload = () => {
+                    canvas.width = width;
+                    canvas.height = height;
+                    ctx.drawImage(image, 0, 0, width, height);
+                    drawHeatmapOverlay(ctx, width, height, result, scaleMode);
+                    resolve(canvas);
+                };
+
+                image.onerror = reject;
+                image.src = getImagePath(result);
+            });
+        }
+
+        // Egy admin kártyán belüli canvasra kirajzolja az összeolvasztott heatmap képet.
+        async function drawMergedHeatmap(canvas, result, scaleMode = 'normalized') {
+            const mergedCanvas = await createMergedCanvas(result, scaleMode);
+            canvas.width = mergedCanvas.width;
+            canvas.height = mergedCanvas.height;
+            canvas.getContext('2d').drawImage(mergedCanvas, 0, 0);
+        }
+
+        function buildHeatmapHistogram(values) {
+            const maxMs = APP_CONFIG.heatmapHistogramMaxValueMs;
+            const binWidthMs = APP_CONFIG.heatmapHistogramBinWidthMs;
+            const binCount = Math.ceil(maxMs / binWidthMs) + 1;
+            const bins = Array.from({ length: binCount }, () => 0);
+
+            values.forEach((value) => {
+                if (!value) {
+                    bins[0] += 1;
+                    return;
+                }
+
+                const clamped = Math.min(maxMs, value);
+                const index = Math.min(binCount - 1, Math.floor(clamped / binWidthMs) + 1);
+                bins[index] += 1;
+            });
+
+            return bins;
+        }
+
+        function drawHeatmapHistogram(canvas, result) {
+            const values = result.values || [];
+            const bins = buildHeatmapHistogram(values);
+            const width = 900;
+            const height = 240;
+            const paddingLeft = 52;
+            const paddingRight = 16;
+            const paddingTop = 18;
+            const paddingBottom = 36;
+            const plotWidth = width - paddingLeft - paddingRight;
+            const plotHeight = height - paddingTop - paddingBottom;
+            const maxFrequency = APP_CONFIG.heatmapHistogramMaxFrequency;
+            const maxSeconds = APP_CONFIG.heatmapHistogramMaxValueMs / 1000;
+            const ctx = canvas.getContext('2d');
+
+            canvas.width = width;
+            canvas.height = height;
+            ctx.clearRect(0, 0, width, height);
+            ctx.fillStyle = '#101010';
+            ctx.fillRect(0, 0, width, height);
+
+            ctx.strokeStyle = '#6b7280';
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(paddingLeft, paddingTop);
+            ctx.lineTo(paddingLeft, paddingTop + plotHeight);
+            ctx.lineTo(paddingLeft + plotWidth, paddingTop + plotHeight);
+            ctx.stroke();
+
+            const barWidth = plotWidth / bins.length;
+            ctx.fillStyle = '#38bdf8';
+            bins.forEach((count, index) => {
+                const barHeight = Math.min(plotHeight, (count / maxFrequency) * plotHeight);
+                const x = paddingLeft + (index * barWidth);
+                const y = paddingTop + plotHeight - barHeight;
+                ctx.fillRect(x + 1, y, Math.max(1, barWidth - 2), barHeight);
+            });
+
+            ctx.fillStyle = '#d1d5db';
+            ctx.font = '12px Arial';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'top';
+            ctx.fillText('0', paddingLeft + barWidth, paddingTop + plotHeight + 8);
+            for (let second = 0; second <= maxSeconds; second += 5) {
+                if (second === 0) {
+                    continue;
+                }
+
+                const x = paddingLeft + barWidth + ((second / maxSeconds) * (plotWidth - barWidth));
+                const label = second === maxSeconds ? `${APP_CONFIG.heatmapHistogramMaxValueMs} ms` : String(second);
+                ctx.fillText(label, x, paddingTop + plotHeight + 8);
+            }
+
+            ctx.textAlign = 'right';
+            ctx.textBaseline = 'middle';
+            ctx.fillText('0', paddingLeft - 8, paddingTop + plotHeight);
+            ctx.fillText(`${maxFrequency} db`, paddingLeft - 8, paddingTop);
+        }
+
+        // Canvasból Blob objektumot készít; a ZIP exporthoz kell.
+        function canvasToBlob(canvas) {
+            return new Promise((resolve) => {
+                canvas.toBlob(resolve, 'image/png');
+            });
+        }
+
+        // A kiválasztott user minden heatmap képét egy ZIP fájlba csomagolja.
+        async function downloadResultsZip() {
+            if (!window.JSZip) {
+                alert('A ZIP export könyvtár nem töltődött be.');
+                return;
+            }
+
+            const zip = new JSZip();
+
+            for (const result of currentResults) {
+                const normalizedCanvas = await createMergedCanvas(result);
+                const absoluteCanvas = await createMergedCanvas(result, 'absolute');
+                const normalizedBlob = await canvasToBlob(normalizedCanvas);
+                const absoluteBlob = await canvasToBlob(absoluteCanvas);
+                const baseFilename = `session-${String(result.sessionId).padStart(2, '0')}_image-${String(result.imageIndex).padStart(3, '0')}`;
+                zip.file(`${baseFilename}_normalized.png`, normalizedBlob);
+                zip.file(`${baseFilename}_absolute.png`, absoluteBlob);
+            }
+
+            const zipBlob = await zip.generateAsync({ type: 'blob' });
+            const link = document.createElement('a');
+            const url = URL.createObjectURL(zipBlob);
+            link.href = url;
+            link.download = `PlaceGuess_${currentUsername}_heatmaps.zip`;
+            link.click();
+            URL.revokeObjectURL(url);
+        }
+
+        // Kirajzolja a kiválasztott user mentett heatmap eredménykártyáit és az export gombokat.
+        function renderResults(username) {
+            const results = getResults(username);
+            currentUsername = username;
+            currentResults = results;
+            elements.results.innerHTML = '';
+
+            if (results.length === 0) {
+                elements.downloadZip.hidden = true;
+                elements.results.textContent = 'Nincs mentett heatmap eredmény.';
+                return;
+            }
+
+            elements.downloadZip.hidden = false;
+
+            results.forEach((result) => {
+                const card = document.createElement('article');
+                card.className = 'admin-result-card';
+                card.innerHTML = `
+                    <h3>Session ${result.sessionId} / Kép ${String(result.imageIndex).padStart(3, '0')}</h3>
+                    <p>Heatmap: ${result.heatmapWidth} × ${result.heatmapHeight}</p>
+                    <p>Teljes képnézési idő: ${result.totalViewingTimeMs || 'nincs adat'} ms</p>
+                    <p>Reveal idő: ${result.totalRevealTimeMs} ms</p>
+                    <p>Országválasz: ${formatCountryAnswer(result.countryAnswer)}</p>
+                    <p>Bizonyosság: ${result.confidence ? `${result.confidence} / 10` : 'nincs válasz'}</p>
+                    <p>Mentve: ${result.completedAt}</p>
+                    <p>Válaszolva: ${result.answeredAt || 'nincs válasz'}</p>
+                    <div class="admin-heatmap-pair">
+                        <div class="admin-heatmap-view">
+                            <h4>Normalizált heatmap</h4>
+                            <canvas data-heatmap-mode="normalized" title="Jobb klikk: kép mentése másként"></canvas>
+                        </div>
+                        <div class="admin-heatmap-view">
+                            <h4>Abszolút heatmap (${APP_CONFIG.absoluteHeatmapMaxRevealTimeMs / 1000} sec)</h4>
+                            <canvas data-heatmap-mode="absolute" title="Jobb klikk: kép mentése másként"></canvas>
+                        </div>
+                    </div>
+                    <div class="admin-heatmap-histogram">
+                        <h4>Abszolút heatmap gyakoriságeloszlás</h4>
+                        <canvas data-heatmap-histogram></canvas>
+                        <div class="admin-heatmap-color-scale" style="${getHeatmapColorScaleStyle()}"></div>
+                    </div>
+                `;
+
+                elements.results.appendChild(card);
+                drawMergedHeatmap(card.querySelector('[data-heatmap-mode="normalized"]'), result);
+                drawMergedHeatmap(card.querySelector('[data-heatmap-mode="absolute"]'), result, 'absolute');
+                drawHeatmapHistogram(card.querySelector('[data-heatmap-histogram]'), result);
+            });
+        }
+
+        async function initAdmin() {
+            await loadAnswerOptionsMap();
+
+            if (isSupabaseAdminMode()) {
+                document.querySelector('.admin-header p').textContent = 'Supabase eredmények áttekintése';
+                await loadSupabaseResults();
+            }
+
+            renderUsers();
+        }
+
+        // Export gombok eseménykezelői és induló userlista kirajzolása.
+        elements.downloadZip.addEventListener('click', downloadResultsZip);
+        initAdmin();
+    </script>
+</body>
+</html>

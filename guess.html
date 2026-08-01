@@ -1,0 +1,837 @@
+<!DOCTYPE html>
+<html lang="hu">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <title>Self Heatmap - Guess</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <main id="app" aria-label="Self Heatmap alkalmazás">
+        <div id="top-controls">
+            <aside id="timer-track" aria-label="Idő visszaszámláló sáv">
+                <div id="timer-fill"></div>
+            </aside>
+
+            <button id="next-image-button" type="button" aria-label="Tovább a következő képre">▶</button>
+        </div>
+
+        <section id="image-stage" aria-label="Képterület">
+            <img id="blurred-image" alt="Aktuális kép" draggable="false">
+            <img id="sharp-image" alt="Aktuális kép éles réteg" draggable="false">
+            <canvas id="heatmap-overlay" aria-hidden="true"></canvas>
+        </section>
+    </main>
+
+    <script src="app-config.js"></script>
+    <script src="app-utils.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script>
+        const supabaseClient = window.supabase.createClient(APP_CONFIG.supabaseUrl, APP_CONFIG.supabaseAnonKey);
+        const ANSWER_OPTIONS_PATH = 'assets/images/answer-options.json';
+
+        // A képnéző oldal alap beállításai: időzítés, blur, reveal kör és heatmap részletesség.
+        const CONFIG = {
+            initialImageIndex: 1,
+            imageDurationMs: APP_CONFIG.imageDurationMs,
+            heatmapResolutionScale: 0.1,
+            heatmapSmoothingRadius: 4,
+            internalSmoothingRadius: 3,
+            doubleTapMaxGapMs: 300,
+            revealDiameterHeightRatio: 0.125,
+            revealRadiusMinPx: 12,
+            revealInterpolationStepRatio: 0.5,
+            revealWeightFalloffStartRatio: 0.5,
+            revealWeightEdgeMinRatio: 0,
+            blurAmount: '10px'
+        };
+
+        // Az alkalmazás aktuális futási állapota az éppen nézett képre.
+        const state = {
+            currentImageIndex: CONFIG.initialImageIndex,
+            isFinished: false,
+            revealRadiusPx: CONFIG.revealRadiusMinPx,
+            isPointerActive: false,
+            imageDurationMs: CONFIG.imageDurationMs,
+            imageStartTime: 0,
+            animationFrameId: null,
+            lastTapTime: 0,
+            lastFrameTime: 0,
+            heatmapWidth: 0,
+            heatmapHeight: 0,
+            heatmapData: null,
+            totalRevealTimeMs: 0,
+            pointerX: 0,
+            pointerY: 0,
+            previousPointerX: 0,
+            previousPointerY: 0,
+            currentImagePath: '',
+            currentAnswerOptionsKey: '',
+            isHeatmapPreviewVisible: false
+        };
+
+        let answerOptionsByImage = null;
+
+        // A képnéző oldal gyakran használt DOM elemei.
+        const elements = {
+            imageStage: document.getElementById('image-stage'),
+            timerTrack: document.getElementById('timer-track'),
+            nextImageButton: document.getElementById('next-image-button'),
+            blurredImage: document.getElementById('blurred-image'),
+            sharpImage: document.getElementById('sharp-image'),
+            heatmapOverlay: document.getElementById('heatmap-overlay'),
+            timerFill: document.getElementById('timer-fill')
+        };
+
+        async function loadAnswerOptionsMap() {
+            if (answerOptionsByImage) {
+                return answerOptionsByImage;
+            }
+
+            const response = await fetch(ANSWER_OPTIONS_PATH);
+            if (!response.ok) {
+                throw new Error('Answer options JSON not found');
+            }
+
+            answerOptionsByImage = await response.json();
+            return answerOptionsByImage;
+        }
+
+        function getAnswerOptionsKey(sessionId, imageIndex) {
+            const sessionFolder = String(sessionId).padStart(3, '0');
+            const keys = Object.keys(answerOptionsByImage)
+                .filter((key) => key.startsWith(`${sessionFolder}/`))
+                .sort();
+
+            return keys[imageIndex - 1];
+        }
+
+        // Összerakja az adott session adott képének fájlútvonalát.
+        function getImagePath(sessionId, imageIndex) {
+            const sessionFolder = String(sessionId).padStart(3, '0');
+            const answerOptionsKey = getAnswerOptionsKey(sessionId, imageIndex);
+            const fileName = answerOptionsKey.split('/')[1];
+            return `assets/images/${sessionFolder}/${fileName}`;
+        }
+
+        // Előre betölt egy képet, és hibát jelez, ha nem található.
+        function preloadImage(path) {
+            return new Promise((resolve, reject) => {
+                const image = new Image();
+                image.onload = () => resolve(path);
+                image.onerror = () => reject(new Error(`Nem tölthető a kép: ${path}`));
+                image.src = path;
+            });
+        }
+
+        // Kiszámolja, hogy az object-fit: contain miatt a kép pontosan hol látszik a stage-en belül.
+        function getRenderedImageRect() {
+            const stageRect = elements.imageStage.getBoundingClientRect();
+            const imageWidth = elements.blurredImage.naturalWidth;
+            const imageHeight = elements.blurredImage.naturalHeight;
+
+            if (!imageWidth || !imageHeight) {
+                return {
+                    x: 0,
+                    y: 0,
+                    width: Math.max(1, stageRect.width),
+                    height: Math.max(1, stageRect.height)
+                };
+            }
+
+            const stageRatio = stageRect.width / stageRect.height;
+            const imageRatio = imageWidth / imageHeight;
+
+            if (imageRatio > stageRatio) {
+                const width = stageRect.width;
+                const height = width / imageRatio;
+                return {
+                    x: 0,
+                    y: (stageRect.height - height) / 2,
+                    width,
+                    height
+                };
+            }
+
+            const height = stageRect.height;
+            const width = height * imageRatio;
+            return {
+                x: (stageRect.width - width) / 2,
+                y: 0,
+                width,
+                height
+            };
+        }
+
+        // Lezárja a képnéző oldalt, és visszairányít a session dashboardra.
+        function returnToSessions() {
+            state.isFinished = true;
+            if (state.animationFrameId) {
+                cancelAnimationFrame(state.animationFrameId);
+                state.animationFrameId = null;
+            }
+            elements.blurredImage.removeAttribute('src');
+            elements.sharpImage.removeAttribute('src');
+            hideHeatmapPreview();
+            hideRevealCircle();
+            elements.timerTrack.style.display = 'none';
+            localStorage.removeItem(getCurrentSessionIdKey());
+            window.location.href = 'sessions.html';
+        }
+
+        // Betölti az aktuális felhasználó session állapotát.
+        function loadProgress() {
+            const progress = readJson(getProgressKey(), null);
+            return progress && Array.isArray(progress.sessions) ? progress : null;
+        }
+
+        // Elmenti az aktuális felhasználó session állapotát.
+        function saveProgress(progress) {
+            localStorage.setItem(getProgressKey(), JSON.stringify(progress));
+        }
+
+        // Kiolvassa, melyik session fut éppen, és visszaadja a hozzá tartozó progress objektumot is.
+        function getCurrentSessionContext() {
+            const currentSessionIdRaw = localStorage.getItem(getCurrentSessionIdKey());
+            if (!currentSessionIdRaw) {
+                return null;
+            }
+
+            const currentSessionId = Number.parseInt(currentSessionIdRaw, 10);
+
+            if (isSupabaseMode()) {
+                return {
+                    progress: null,
+                    session: {
+                        id: currentSessionId,
+                        nextImageIndex: CONFIG.initialImageIndex
+                    }
+                };
+            }
+
+            const progress = loadProgress();
+            if (!progress) {
+                return null;
+            }
+
+            const session = progress.sessions.find((item) => item.id === currentSessionId);
+            if (!session) {
+                return null;
+            }
+
+            return { progress, session };
+        }
+
+        async function getNextSupabaseImageIndex(sessionId) {
+            let query = supabaseClient
+                .from('heatmap_results')
+                .select('image_index')
+                .eq('session_id', sessionId);
+
+            const userId = getSupabaseUserId();
+            if (userId) {
+                query = query.eq('user_id', userId);
+            }
+
+            const { data, error } = await query;
+
+            if (error) {
+                console.error('SUPABASE_NEXT_IMAGE_LOAD_FAILED', error);
+                return null;
+            }
+
+            const completedIndexes = new Set((data || []).map((row) => row.image_index));
+            for (let imageIndex = 1; imageIndex <= APP_CONFIG.imagesPerSession; imageIndex += 1) {
+                if (!completedIndexes.has(imageIndex)) {
+                    return imageIndex;
+                }
+            }
+
+            return null;
+        }
+
+        // Ellenőrzi, hogy a guess oldal valóban session kártyáról indult-e.
+        async function applySessionStartState() {
+            const username = getUsername();
+            if (!username) {
+                window.location.href = 'index.html';
+                return false;
+            }
+
+            const launchToken = localStorage.getItem(getLaunchTokenKey());
+            if (launchToken !== '1') {
+                window.location.href = 'sessions.html';
+                return false;
+            }
+
+            localStorage.removeItem(getLaunchTokenKey());
+
+            const context = getCurrentSessionContext();
+            if (!context) {
+                window.location.href = 'sessions.html';
+                return false;
+            }
+
+            if (isSupabaseMode()) {
+                const nextImageIndex = await getNextSupabaseImageIndex(context.session.id);
+                if (!nextImageIndex) {
+                    window.location.href = 'sessions.html';
+                    return false;
+                }
+
+                state.currentImageIndex = nextImageIndex;
+                return true;
+            }
+
+            state.currentImageIndex = Math.max(1, context.session.nextImageIndex || 1);
+            return true;
+        }
+
+        // Betölti a mentett heatmap eredmények indexlistáját.
+        function loadResultIndex() {
+            const index = readJson(getResultIndexKey(), []);
+            return Array.isArray(index) ? index : [];
+        }
+
+        // Elmenti az aktuális kép heatmap eredményét localStorage-ba.
+        function saveHeatmapResultLocally(result) {
+            const key = getResultKey(result.sessionId, result.imageIndex);
+            try {
+                localStorage.setItem(key, JSON.stringify(result));
+
+                const index = loadResultIndex();
+                if (!index.includes(key)) {
+                    index.push(key);
+                    localStorage.setItem(getResultIndexKey(), JSON.stringify(index));
+                }
+
+                return true;
+            } catch (error) {
+                console.error('HEATMAP_SAVE_FAILED', error);
+                return false;
+            }
+        }
+
+        // Frissíti a bal oldali időcsík magasságát az eltelt idő alapján.
+        function updateTimerVisual(progress) {
+            const clamped = Math.max(0, Math.min(1, progress));
+            const remainingPercent = (1 - clamped) * 100;
+            elements.timerFill.style.width = `${remainingPercent}%`;
+        }
+
+        // Megkeresi a heatmap pozitív értékeinek minimumát és maximumát a skálázáshoz.
+        function getPositiveHeatRange(data) {
+            if (!data) {
+                return null;
+            }
+
+            let minPositive = Infinity;
+            let maxValue = 0;
+
+            for (let i = 0; i < data.length; i += 1) {
+                const value = data[i];
+
+                if (value > 0 && value < minPositive) {
+                    minPositive = value;
+                }
+
+                if (value > maxValue) {
+                    maxValue = value;
+                }
+            }
+
+            if (!Number.isFinite(minPositive) || maxValue <= 0) {
+                return null;
+            }
+
+            return { minPositive, maxValue };
+        }
+
+        // Lágyítja a heatmap adatokat, hogy a preview kevésbé darabos legyen.
+        function smoothHeatmapData(source, width, height, radius = CONFIG.internalSmoothingRadius) {
+            if (!source) {
+                return null;
+            }
+
+            const smoothed = new Float32Array(source.length);
+
+            for (let y = 0; y < height; y += 1) {
+                for (let x = 0; x < width; x += 1) {
+                    const centerIndex = (y * width) + x;
+                    const centerValue = source[centerIndex];
+
+                    if (centerValue <= 0) {
+                        smoothed[centerIndex] = 0;
+                        continue;
+                    }
+
+                    let sum = 0;
+                    let count = 0;
+
+                    const minY = Math.max(0, y - radius);
+                    const maxY = Math.min(height - 1, y + radius);
+                    const minX = Math.max(0, x - radius);
+                    const maxX = Math.min(width - 1, x + radius);
+
+                    for (let ny = minY; ny <= maxY; ny += 1) {
+                        for (let nx = minX; nx <= maxX; nx += 1) {
+                            const neighborValue = source[(ny * width) + nx];
+
+                            if (neighborValue > 0) {
+                                sum += neighborValue;
+                                count += 1;
+                            }
+                        }
+                    }
+
+                    smoothed[centerIndex] = count > 0 ? (sum / count) : centerValue;
+                }
+            }
+
+            return smoothed;
+        }
+
+        // Egy reveal környi mintát hozzáad a heatmaphez az adott kurzorpozíciónál.
+        function addCircleSampleToHeatmap(sampleX, sampleY, sampleMs) {
+            if (!state.heatmapData || sampleMs <= 0) {
+                return;
+            }
+
+            if (!isPointInsideRenderedImage(sampleX, sampleY)) {
+                return;
+            }
+
+            const revealCenter = getRevealCenterFromPointer(sampleX, sampleY);
+            const renderedRect = getRenderedImageRect();
+            const stageWidth = Math.max(1, renderedRect.width);
+            const stageHeight = Math.max(1, renderedRect.height);
+
+            const radiusInGridX = (state.revealRadiusPx / stageWidth) * state.heatmapWidth;
+            const radiusInGridY = (state.revealRadiusPx / stageHeight) * state.heatmapHeight;
+            const localX = revealCenter.x - renderedRect.x;
+            const localY = revealCenter.y - renderedRect.y;
+
+            if (localX < 0 || localY < 0 || localX > stageWidth || localY > stageHeight) {
+                return;
+            }
+
+            const centerGridX = (localX / stageWidth) * state.heatmapWidth;
+            const centerGridY = (localY / stageHeight) * state.heatmapHeight;
+
+            const minX = Math.max(0, Math.floor(centerGridX - radiusInGridX));
+            const maxX = Math.min(state.heatmapWidth - 1, Math.ceil(centerGridX + radiusInGridX));
+            const minY = Math.max(0, Math.floor(centerGridY - radiusInGridY));
+            const maxY = Math.min(state.heatmapHeight - 1, Math.ceil(centerGridY + radiusInGridY));
+
+            for (let y = minY; y <= maxY; y += 1) {
+                for (let x = minX; x <= maxX; x += 1) {
+                    const dx = x - centerGridX;
+                    const dy = y - centerGridY;
+
+                    const nx = dx / Math.max(1e-6, radiusInGridX);
+                    const ny = dy / Math.max(1e-6, radiusInGridY);
+                    const normalizedDistance = Math.sqrt((nx * nx) + (ny * ny));
+
+                    if (normalizedDistance <= 1) {
+                        const falloffStart = Math.max(0, Math.min(1, CONFIG.revealWeightFalloffStartRatio));
+                        const edgeMin = Math.max(0, Math.min(1, CONFIG.revealWeightEdgeMinRatio));
+                        const falloffRange = Math.max(1e-6, 1 - falloffStart);
+                        const falloffProgress = Math.max(0, (normalizedDistance - falloffStart) / falloffRange);
+                        const radialWeight = 1 - (falloffProgress * (1 - edgeMin));
+                        const index = (y * state.heatmapWidth) + x;
+                        state.heatmapData[index] += sampleMs * radialWeight;
+                    }
+                }
+            }
+        }
+
+        // Kirajzolja az aktuális kép eddig gyűjtött heatmap preview-ját.
+        function drawHeatmapPreview() {
+            if (!state.heatmapData || state.totalRevealTimeMs <= 0) {
+                return;
+            }
+
+            const maxValue = state.heatmapData.reduce((max, value) => Math.max(max, value), 0);
+            if (maxValue <= 0) {
+                return;
+            }
+
+            const canvas = elements.heatmapOverlay;
+            const ctx = canvas.getContext('2d');
+
+            canvas.width = Math.max(1, elements.blurredImage.naturalWidth);
+            canvas.height = Math.max(1, elements.blurredImage.naturalHeight);
+
+            const imageData = ctx.createImageData(canvas.width, canvas.height);
+            const pixels = imageData.data;
+
+            for (let py = 0; py < canvas.height; py += 1) {
+                const gy = Math.min(state.heatmapHeight - 1, Math.floor((py / canvas.height) * state.heatmapHeight));
+
+                for (let px = 0; px < canvas.width; px += 1) {
+                    const gx = Math.min(state.heatmapWidth - 1, Math.floor((px / canvas.width) * state.heatmapWidth));
+                    const cellIndex = (gy * state.heatmapWidth) + gx;
+                    const rawValue = state.heatmapData[cellIndex];
+                    const idx = ((py * canvas.width) + px) * 4;
+
+                    if (rawValue > 0) {
+                        const [r, g, b] = getHeatColor(rawValue / maxValue);
+                        pixels[idx] = r;
+                        pixels[idx + 1] = g;
+                        pixels[idx + 2] = b;
+                        pixels[idx + 3] = APP_CONFIG.heatmapOverlayAlpha;
+                    }
+                }
+            }
+
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.putImageData(imageData, 0, 0);
+        }
+
+        // Megjeleníti a heatmap preview módot H billentyűre.
+        function showHeatmapPreview() {
+            elements.blurredImage.style.opacity = '1';
+            elements.blurredImage.style.filter = 'none';
+            elements.sharpImage.style.display = 'none';
+            drawHeatmapPreview();
+            elements.heatmapOverlay.style.display = 'block';
+            state.isHeatmapPreviewVisible = true;
+        }
+
+        // Elrejti a heatmap preview-t, és visszaállítja a normál homályos/éles réteges nézetet.
+        function hideHeatmapPreview() {
+            elements.blurredImage.style.opacity = '1';
+            elements.blurredImage.style.filter = `blur(${CONFIG.blurAmount})`;
+            elements.sharpImage.style.display = 'block';
+            elements.heatmapOverlay.style.display = 'none';
+            state.isHeatmapPreviewVisible = false;
+        }
+
+        // Ki/be kapcsolja a heatmap preview nézetet.
+        function toggleHeatmapPreview() {
+            if (state.isFinished) {
+                return;
+            }
+
+            if (state.isHeatmapPreviewVisible) {
+                hideHeatmapPreview();
+            } else {
+                showHeatmapPreview();
+            }
+        }
+
+        // Billentyűkezelés: H billentyűvel kapcsolható a heatmap előnézet.
+        function onKeyDown(event) {
+            if (event.key.toLowerCase() === 'h') {
+                toggleHeatmapPreview();
+            }
+        }
+
+        // Új képnél létrehozza az üres heatmap rácsot az eredeti képméret alapján.
+        function createHeatmapForCurrentImage() {
+            const safeWidth = Math.max(1, elements.blurredImage.naturalWidth);
+            const safeHeight = Math.max(1, elements.blurredImage.naturalHeight);
+
+            state.heatmapWidth = Math.max(1, Math.round(safeWidth * CONFIG.heatmapResolutionScale));
+            state.heatmapHeight = Math.max(1, Math.round(safeHeight * CONFIG.heatmapResolutionScale));
+            state.heatmapData = new Float32Array(state.heatmapWidth * state.heatmapHeight);
+            state.totalRevealTimeMs = 0;
+        }
+
+        // Minden animation frame-ben gyűjti a pointer aktuális reveal idejét a heatmaphez.
+        function collectHeatmapSample(deltaMs) {
+            if (!state.isPointerActive || !state.heatmapData || deltaMs <= 0) {
+                return;
+            }
+
+            const dx = state.pointerX - state.previousPointerX;
+            const dy = state.pointerY - state.previousPointerY;
+            const distance = Math.hypot(dx, dy);
+            const stepSize = Math.max(1, state.revealRadiusPx * CONFIG.revealInterpolationStepRatio);
+            const steps = Math.max(1, Math.ceil(distance / stepSize));
+            const sampleMs = deltaMs / steps;
+
+            for (let i = 1; i <= steps; i += 1) {
+                const t = i / steps;
+                const sampleX = state.previousPointerX + (dx * t);
+                const sampleY = state.previousPointerY + (dy * t);
+                addCircleSampleToHeatmap(sampleX, sampleY, sampleMs);
+            }
+
+            state.totalRevealTimeMs += deltaMs;
+        }
+
+        // A nyers időadatokból millisec alapú, menthető heatmap értékeket készít.
+        function buildHeatmapTimeValues() {
+            if (!state.heatmapData) {
+                return [];
+            }
+
+            return Array.from(state.heatmapData, (value) => Math.round(value));
+        }
+
+        // Összerakja és elmenti az aktuális kép teljes eredménycsomagját.
+        function exportCurrentImageHeatmap() {
+            if (!state.heatmapData) {
+                return false;
+            }
+
+            const context = getCurrentSessionContext();
+            if (!context) {
+                return false;
+            }
+
+            const payload = {
+                username: getUsername(),
+                sessionId: context.session.id,
+                imageIndex: state.currentImageIndex,
+                image: state.currentImagePath,
+                imageNaturalWidth: elements.blurredImage.naturalWidth,
+                imageNaturalHeight: elements.blurredImage.naturalHeight,
+                heatmapWidth: state.heatmapWidth,
+                heatmapHeight: state.heatmapHeight,
+                heatmapResolutionScale: CONFIG.heatmapResolutionScale,
+                durationMs: state.imageDurationMs,
+                totalViewingTimeMs: Math.round(performance.now() - state.imageStartTime),
+                totalRevealTimeMs: Math.round(state.totalRevealTimeMs),
+                values: buildHeatmapTimeValues(),
+                completedAt: new Date().toISOString()
+            };
+
+            const isSaved = saveHeatmapResultLocally(payload);
+            if (!isSaved) {
+                return false;
+            }
+
+            console.log('HEATMAP_RESULT', payload);
+            return true;
+        }
+
+        // Elindítja a kép 30 másodperces időzítőjét és a folyamatos mintavételezést.
+        function startImageTimer() {
+            state.imageStartTime = performance.now();
+            state.lastFrameTime = state.imageStartTime;
+            updateTimerVisual(0);
+
+            const tick = (now) => {
+                if (state.isFinished) {
+                    return;
+                }
+
+                const elapsed = now - state.imageStartTime;
+                const frameDelta = now - state.lastFrameTime;
+                state.lastFrameTime = now;
+
+                collectHeatmapSample(frameDelta);
+                const progress = elapsed / state.imageDurationMs;
+                updateTimerVisual(progress);
+
+                if (progress >= 1) {
+                    advanceToNextImage();
+                    return;
+                }
+
+                state.animationFrameId = requestAnimationFrame(tick);
+            };
+
+            state.animationFrameId = requestAnimationFrame(tick);
+        }
+
+        // Kép végekor elmenti az eredményt, majd a válaszoldalra irányít.
+        function advanceToNextImage() {
+            const isExported = exportCurrentImageHeatmap();
+            if (!isExported) {
+                return;
+            }
+
+            const context = getCurrentSessionContext();
+            if (!context) {
+                return;
+            }
+
+            localStorage.setItem(getPendingAnswerKey(), JSON.stringify({
+                sessionId: context.session.id,
+                imageIndex: state.currentImageIndex,
+                answerOptionsKey: state.currentAnswerOptionsKey,
+                resultKey: getResultKey(context.session.id, state.currentImageIndex)
+            }));
+
+            window.location.href = 'answer.html';
+        }
+
+        // Dupla kattintás/tap esetén azonnal lezárja az aktuális képet.
+        function skipToNextImageNow() {
+            if (state.isFinished) {
+                return;
+            }
+
+            if (state.animationFrameId) {
+                cancelAnimationFrame(state.animationFrameId);
+                state.animationFrameId = null;
+            }
+
+            advanceToNextImage();
+        }
+
+        // Az idősávra kattintva azonnal lezárja az aktuális képet.
+        function onTimerClickToSkip() {
+            if (state.isFinished) {
+                return;
+            }
+
+            skipToNextImageNow();
+        }
+
+        // Kiszámolja a reveal kör méretét az aktuális viewport alapján.
+        function updateRevealRadius() {
+            const diameterPx = window.innerHeight * CONFIG.revealDiameterHeightRatio;
+            state.revealRadiusPx = Math.max(CONFIG.revealRadiusMinPx, Math.round(diameterPx / 2));
+        }
+
+        // Beállítja az éles kör vizuális helyét; a kurzor a kör jobb alsó pontját vezérli.
+        function setRevealCircle(x, y) {
+            const revealCenter = getRevealCenterFromPointer(x, y);
+            elements.sharpImage.style.clipPath = `circle(${state.revealRadiusPx}px at ${revealCenter.x}px ${revealCenter.y}px)`;
+        }
+
+        // Elrejti az éles reveal kört.
+        function hideRevealCircle() {
+            elements.sharpImage.style.clipPath = 'circle(0px at 0px 0px)';
+        }
+
+        // A pointer pozíciójából kiszámolja a reveal kör középpontját.
+        function getRevealCenterFromPointer(x, y) {
+            return {
+                x: x - state.revealRadiusPx,
+                y: y - state.revealRadiusPx
+            };
+        }
+
+        // Böngészős pointer eseményből stage-en belüli koordinátát számol.
+        function getLocalPoint(event) {
+            const rect = elements.imageStage.getBoundingClientRect();
+            const x = event.clientX - rect.left;
+            const y = event.clientY - rect.top;
+            return { x, y };
+        }
+
+        // Megmondja, hogy egy pont a ténylegesen látható képterületen belül van-e.
+        function isPointInsideRenderedImage(x, y) {
+            const renderedRect = getRenderedImageRect();
+            return x >= renderedRect.x && x <= (renderedRect.x + renderedRect.width)
+                && y >= renderedRect.y && y <= (renderedRect.y + renderedRect.height);
+        }
+
+        // Pointer lenyomásakor aktiválja a reveal kört, ha a kép felületén indult.
+        function onPointerDown(event) {
+            if (state.isFinished) {
+                return;
+            }
+
+            elements.imageStage.setPointerCapture(event.pointerId);
+            const { x, y } = getLocalPoint(event);
+
+            if (!isPointInsideRenderedImage(x, y)) {
+                state.isPointerActive = false;
+                hideRevealCircle();
+                return;
+            }
+
+            state.isPointerActive = true;
+            state.previousPointerX = x;
+            state.previousPointerY = y;
+            state.pointerX = x;
+            state.pointerY = y;
+            setRevealCircle(x, y);
+        }
+
+        // Pointer mozgatásakor frissíti a reveal kör helyét.
+        function onPointerMove(event) {
+            if (!state.isPointerActive || state.isFinished) {
+                return;
+            }
+
+            const { x, y } = getLocalPoint(event);
+
+            state.previousPointerX = state.pointerX;
+            state.previousPointerY = state.pointerY;
+            state.pointerX = x;
+            state.pointerY = y;
+            setRevealCircle(x, y);
+        }
+
+        // Pointer felengedésekor vagy megszakításakor kikapcsolja a reveal kört.
+        function onPointerUpOrCancel(event) {
+            if (elements.imageStage.hasPointerCapture && elements.imageStage.hasPointerCapture(event.pointerId)) {
+                elements.imageStage.releasePointerCapture(event.pointerId);
+            }
+            state.isPointerActive = false;
+            hideRevealCircle();
+        }
+
+        // Beköti a pointer eseményeket a képterületre.
+        function bindPointerEvents() {
+            elements.imageStage.addEventListener('pointerdown', onPointerDown);
+            elements.imageStage.addEventListener('pointermove', onPointerMove);
+            elements.imageStage.addEventListener('pointerup', onPointerUpOrCancel);
+            elements.imageStage.addEventListener('pointercancel', onPointerUpOrCancel);
+            elements.nextImageButton.addEventListener('click', onTimerClickToSkip);
+        }
+
+        // Beköti a billentyűzetes eseményeket.
+        function bindKeyboardEvents() {
+            window.addEventListener('keydown', onKeyDown);
+        }
+
+        // Betölti az aktuális session aktuális képét, majd elindítja a mérést.
+        async function loadAndShowCurrentImage() {
+            const context = getCurrentSessionContext();
+            if (!context) {
+                returnToSessions();
+                return;
+            }
+
+            try {
+                await loadAnswerOptionsMap();
+                const path = getImagePath(context.session.id, state.currentImageIndex);
+                state.currentImagePath = path;
+                state.currentAnswerOptionsKey = getAnswerOptionsKey(context.session.id, state.currentImageIndex);
+                await preloadImage(path);
+                elements.blurredImage.src = path;
+                elements.sharpImage.src = path;
+                elements.sharpImage.style.display = 'block';
+                hideHeatmapPreview();
+                hideRevealCircle();
+                elements.timerTrack.style.display = 'flex';
+                createHeatmapForCurrentImage();
+                startImageTimer();
+            } catch (error) {
+                returnToSessions();
+                console.warn(error.message);
+            }
+        }
+
+        // Alaphelyzetbe állítja a vizuális rétegeket induláskor.
+        function initLayout() {
+            updateTimerVisual(0);
+            elements.heatmapOverlay.style.display = 'none';
+            elements.sharpImage.style.display = 'block';
+            hideRevealCircle();
+        }
+
+        initLayout();
+        bindPointerEvents();
+        bindKeyboardEvents();
+        updateRevealRadius();
+        window.addEventListener('resize', updateRevealRadius);
+
+        async function init() {
+            if (await applySessionStartState()) {
+                loadAndShowCurrentImage();
+            }
+        }
+
+        init();
+    </script>
+</body>
+</html>

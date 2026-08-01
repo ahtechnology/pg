@@ -1,0 +1,535 @@
+:root {
+    color-scheme: dark;
+}
+
+* {
+    box-sizing: border-box;
+    -webkit-tap-highlight-color: transparent;
+    user-select: none;
+}
+
+html,
+body {
+    margin: 0;
+    width: 100%;
+    height: 100%;
+    background: #111;
+    color: #fff;
+    font-family: Arial, sans-serif;
+}
+
+body {
+    overflow: hidden;
+}
+
+[hidden] {
+    display: none !important;
+}
+
+body:has(.admin-page),
+body:has(.sessions-page),
+body:has(.answer-page) {
+    overflow: auto;
+}
+
+#app {
+    width: 100vw;
+    height: 100dvh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 8px;
+}
+
+#top-controls {
+    width: 100%;
+    height: 50px;
+    display: flex;
+    gap: 8px;
+}
+
+#timer-track {
+    flex: 1;
+    height: 50px;
+    background: #2c2c2c;
+    border-radius: 6px;
+    overflow: hidden;
+    display: flex;
+    align-items: stretch;
+    justify-content: flex-start;
+}
+
+#timer-fill {
+    width: 100%;
+    height: 100%;
+    background: #22c55e;
+}
+
+#next-image-button {
+    width: 50px;
+    height: 50px;
+    flex: 0 0 50px;
+    border: none;
+    border-radius: 6px;
+    background: #d1d5db;
+    color: #111;
+    font-size: 28px;
+    line-height: 1;
+    cursor: pointer;
+}
+
+#image-stage {
+    position: relative;
+    flex: 1;
+    width: 100%;
+    min-height: 0;
+    border-radius: 10px;
+    overflow: hidden;
+    background: #000;
+    touch-action: none;
+}
+
+#blurred-image,
+#sharp-image,
+#heatmap-overlay {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+}
+
+#blurred-image,
+#sharp-image,
+#heatmap-overlay {
+    object-fit: contain;
+    user-select: none;
+}
+
+#blurred-image {
+    filter: blur(20px);
+}
+
+#sharp-image {
+    display: none;
+}
+
+#heatmap-overlay {
+    display: none;
+    pointer-events: none;
+}
+
+#end-screen {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    background: rgba(0, 0, 0, 0.75);
+    font-size: clamp(2rem, 10vw, 4rem);
+    font-weight: 700;
+    letter-spacing: 0.08em;
+}
+
+#end-screen[hidden] {
+    display: none;
+}
+
+.auth-page,
+.end-page {
+    width: 100vw;
+    height: 100dvh;
+    display: grid;
+    place-items: center;
+    padding: 16px;
+}
+
+.auth-card {
+    width: min(420px, 100%);
+    display: grid;
+    gap: 10px;
+    padding: 20px;
+    border: 1px solid #2a2a2a;
+    border-radius: 12px;
+    background: #181818;
+}
+
+.auth-card h1 {
+    margin: 0 0 8px;
+    font-size: 1.5rem;
+}
+
+.auth-card label {
+    font-size: 0.95rem;
+    color: #d4d4d4;
+}
+
+.auth-card input,
+.auth-card button {
+    height: 44px;
+    border-radius: 8px;
+    border: 1px solid #333;
+    font: inherit;
+}
+
+.auth-card input {
+    padding: 0 12px;
+    background: #0f0f0f;
+    color: #fff;
+}
+
+.auth-card button {
+    margin-top: 8px;
+    background: #22c55e;
+    color: #061a0d;
+    border: none;
+    font-weight: 700;
+    cursor: pointer;
+}
+
+.end-page h1 {
+    margin: 0;
+    font-size: clamp(2rem, 10vw, 4rem);
+    letter-spacing: 0.08em;
+}
+
+.answer-page {
+    width: 100vw;
+    min-height: 100dvh;
+    display: grid;
+    place-items: center;
+    padding: 16px;
+}
+
+.answer-card {
+    width: min(640px, 100%);
+    display: grid;
+    gap: 16px;
+    padding: 18px;
+    border: 1px solid #2a2a2a;
+    border-radius: 14px;
+    background: #181818;
+}
+
+.answer-card h1,
+.answer-card h2 {
+    margin: 0;
+    font-size: clamp(1.2rem, 5vw, 1.8rem);
+}
+
+.answer-section-inactive {
+    color: #6b7280;
+}
+
+.answer-options {
+    display: grid;
+    gap: 10px;
+}
+
+.answer-options-large {
+    grid-template-columns: 1fr;
+}
+
+.answer-options-scale {
+    grid-template-columns: repeat(5, 1fr);
+}
+
+.answer-options button,
+.answer-menu,
+.answer-submit {
+    min-height: 48px;
+    border: 1px solid #333;
+    border-radius: 10px;
+    background: #101010;
+    color: #fff;
+    font: inherit;
+    font-weight: 700;
+    cursor: pointer;
+}
+
+.answer-actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+    margin-top: 50px;
+}
+
+.answer-menu {
+    background: #101010;
+}
+
+.answer-options button.selected {
+    border-color: #2563eb;
+    background: #2563eb;
+    color: #fff;
+}
+
+.answer-options button.selected:disabled {
+    border-color: #2563eb;
+    background: #2563eb;
+    color: #fff;
+}
+
+.answer-options button.correct,
+.answer-options button.correct:disabled {
+    border-color: #22c55e;
+    background: #22c55e;
+    color: #061a0d;
+}
+
+.answer-options button.incorrect,
+.answer-options button.incorrect:disabled {
+    border-color: #ef4444;
+    background: #ef4444;
+    color: #fff;
+}
+
+.answer-submit {
+    background: #2563eb;
+    border: none;
+}
+
+.answer-submit:disabled,
+.answer-menu:disabled {
+    background: #374151;
+    color: #9ca3af;
+    cursor: not-allowed;
+}
+
+.answer-options button:disabled {
+    background: #374151;
+    color: #9ca3af;
+    cursor: not-allowed;
+}
+
+.sessions-page {
+    width: 100vw;
+    min-height: 100dvh;
+    padding: 16px;
+    display: grid;
+    gap: 16px;
+    align-content: start;
+}
+
+.sessions-header h1 {
+    margin: 0 0 6px;
+    font-size: clamp(1.4rem, 5vw, 2rem);
+}
+
+.sessions-header p {
+    margin: 0;
+    color: #c8c8c8;
+}
+
+.sessions-grid {
+    display: grid;
+    gap: 12px;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.session-card {
+    text-align: left;
+    border: 1px solid #2a2a2a;
+    border-radius: 12px;
+    background: #203878;
+    color: #fff;
+    padding: 14px;
+}
+
+.session-card-separated {
+    background: #133b37;
+}
+
+.session-card-disabled {
+    opacity: 0.45;
+}
+
+.session-card h2 {
+    margin: 0 0 8px;
+    font-size: 1.1rem;
+}
+
+.session-card p {
+    margin: 0 0 6px;
+}
+
+.session-status {
+    font-weight: 700;
+}
+
+.session-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 10px;
+}
+
+.session-start-button,
+.session-reset-button {
+    min-height: 38px;
+    padding: 0 12px;
+    border: none;
+    border-radius: 8px;
+    font: inherit;
+    font-weight: 700;
+    cursor: pointer;
+}
+
+.session-start-button {
+    background: #22c55e;
+    color: #061a0d;
+}
+
+.session-start-button:disabled {
+    background: #374151;
+    color: #9ca3af;
+    cursor: not-allowed;
+}
+
+.session-reset-button {
+    background: #7f1d1d;
+    color: #fff;
+}
+
+.status-not_started {
+    color: #9ca3af;
+}
+
+.status-in_progress {
+    color: #f59e0b;
+}
+
+.status-completed {
+    color: #22c55e;
+}
+
+.admin-page {
+    width: 100vw;
+    min-height: 100dvh;
+    padding: 16px;
+    display: grid;
+    gap: 16px;
+    align-content: start;
+    overflow: auto;
+}
+
+.admin-header h1,
+.admin-panel h2 {
+    margin: 0 0 8px;
+}
+
+.admin-header p {
+    margin: 0;
+    color: #c8c8c8;
+}
+
+.admin-panel,
+.admin-result-card {
+    border: 1px solid #2a2a2a;
+    border-radius: 12px;
+    background: #181818;
+    padding: 14px;
+}
+
+.admin-users {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.admin-users button {
+    min-height: 38px;
+    padding: 0 12px;
+    border: none;
+    border-radius: 8px;
+    background: #22c55e;
+    color: #061a0d;
+    font: inherit;
+    font-weight: 700;
+    cursor: pointer;
+}
+
+.admin-download-button {
+    min-height: 38px;
+    margin: 0 0 12px;
+    padding: 0 12px;
+    border: none;
+    border-radius: 8px;
+    background: #2563eb;
+    color: #fff;
+    font: inherit;
+    font-weight: 700;
+    cursor: pointer;
+}
+
+.admin-progress {
+    display: grid;
+    gap: 6px;
+}
+
+.admin-progress-item {
+    padding: 8px;
+    border-radius: 8px;
+    background: #101010;
+}
+
+.admin-results {
+    display: grid;
+    gap: 14px;
+}
+
+.admin-result-card h3,
+.admin-result-card p {
+    margin: 0 0 6px;
+}
+
+.admin-heatmap-pair {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+    gap: 12px;
+}
+
+.admin-heatmap-view {
+    position: relative;
+    width: 100%;
+    max-width: 720px;
+    background: #000;
+    border-radius: 10px;
+    overflow: hidden;
+}
+
+.admin-heatmap-view h4 {
+    margin: 0;
+    padding: 8px;
+    background: #101010;
+}
+
+.admin-heatmap-view canvas {
+    display: block;
+    width: 100%;
+    height: auto;
+}
+
+.admin-heatmap-histogram {
+    margin-top: 12px;
+    width: 100%;
+    background: #101010;
+    border-radius: 10px;
+    overflow: hidden;
+}
+
+.admin-heatmap-histogram h4 {
+    margin: 0;
+    padding: 8px;
+    background: #101010;
+}
+
+.admin-heatmap-histogram canvas {
+    display: block;
+    width: 100%;
+    height: auto;
+}
+
+.admin-heatmap-color-scale {
+    width: 100%;
+    height: 10px;
+}

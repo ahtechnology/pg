@@ -1,0 +1,421 @@
+<!DOCTYPE html>
+<html lang="hu">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <title>PlaceGuess - Válasz</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <main class="answer-page" aria-label="Kép utáni válasz">
+        <section class="answer-card">
+            <h1>Hol készült a kép?</h1>
+            <div id="country-options" class="answer-options answer-options-large"></div>
+
+            <h2 class="answer-section-inactive">Mennyire vagy biztos a döntésedben?</h2>
+            <div id="confidence-options" class="answer-options answer-options-scale"></div>
+
+            <div id="answer-actions" class="answer-actions">
+                <button id="answer-menu" class="answer-menu" type="button" disabled>Menü</button>
+                <button id="answer-submit" class="answer-submit" type="button" disabled>Tovább</button>
+            </div>
+        </section>
+    </main>
+
+    <script src="app-config.js"></script>
+    <script src="app-utils.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script>
+        const supabaseClient = window.supabase.createClient(APP_CONFIG.supabaseUrl, APP_CONFIG.supabaseAnonKey);
+
+        // Alapértelmezett válaszopciók, ha a külső JSON nem tölthető be.
+        const DEFAULT_COUNTRY_OPTIONS = ['A', 'B'];
+        const ANSWER_OPTIONS_PATH = 'assets/images/answer-options.json';
+        const IMAGES_PER_SESSION = APP_CONFIG.imagesPerSession;
+
+        // A felhasználó aktuális választásait tárolja a Tovább gomb megnyomásáig.
+        const state = {
+            countryAnswer: '',
+            correctCountryAnswer: '',
+            selectedCountryIndex: 0,
+            isAnswerLocked: false,
+            confidence: 0
+        };
+
+        // A válaszoldal gyakran használt DOM elemei.
+        const elements = {
+            questionTitle: document.querySelector('.answer-card h1'),
+            countryOptions: document.getElementById('country-options'),
+            confidenceTitle: document.querySelector('.answer-card h2'),
+            confidenceOptions: document.getElementById('confidence-options'),
+            actions: document.getElementById('answer-actions'),
+            menuButton: document.getElementById('answer-menu'),
+            submitButton: document.getElementById('answer-submit')
+        };
+
+        function isSupabaseUserMode() {
+            const authMode = localStorage.getItem(STORAGE_KEYS.authMode);
+            const username = getUsername().toLowerCase();
+            return authMode === 'supabase' && !username.startsWith(APP_CONFIG.adminEmailPrefix);
+        }
+
+        // Betölti, melyik képhez kell most választ menteni.
+        function loadPendingAnswer() {
+            return readJson(getPendingAnswerKey(), null);
+        }
+
+        // Betölti az aktuális felhasználó session állapotát.
+        function loadProgress() {
+            const progress = readJson(getProgressKey(), null);
+            return progress && Array.isArray(progress.sessions) ? progress : null;
+        }
+
+        function saveProgress(progress) {
+            localStorage.setItem(getProgressKey(), JSON.stringify(progress));
+        }
+
+        // Engedélyezi a Tovább gombot, ha már van ország és bizonyosság választás is.
+        function updateSubmitState() {
+            elements.submitButton.disabled = !state.isAnswerLocked;
+        }
+
+        function setConfidenceOptionsEnabled(isEnabled) {
+            elements.confidenceOptions.querySelectorAll('button').forEach((button) => {
+                button.disabled = !isEnabled;
+            });
+        }
+
+        // Egy kártyacsoportban kijelöli az aktuálisan kiválasztott gombot.
+        function selectButton(container, button) {
+            container.querySelectorAll('button').forEach((item) => item.classList.remove('selected'));
+            button.classList.add('selected');
+        }
+
+        function setCountryOptionsEnabled(isEnabled) {
+            elements.countryOptions.querySelectorAll('button').forEach((button) => {
+                button.disabled = !isEnabled;
+            });
+        }
+
+        function showCorrectAnswer() {
+            const countryButtons = Array.from(elements.countryOptions.querySelectorAll('button'));
+            const selectedButton = countryButtons[state.selectedCountryIndex - 1];
+            const correctButton = countryButtons.find((button) => button.textContent === state.correctCountryAnswer);
+
+            if (selectedButton && state.countryAnswer !== state.correctCountryAnswer) {
+                selectedButton.classList.add('incorrect');
+            }
+
+            if (correctButton) {
+                correctButton.classList.add('correct');
+            }
+
+            elements.questionTitle.textContent = 'Itt készült a kép:';
+            elements.confidenceTitle.classList.add('answer-section-inactive');
+            elements.menuButton.disabled = false;
+            elements.submitButton.disabled = false;
+        }
+
+        function lockAnswer() {
+            state.isAnswerLocked = true;
+            setCountryOptionsEnabled(false);
+            setConfidenceOptionsEnabled(false);
+            setTimeout(showCorrectAnswer, 1200);
+        }
+
+        // A session/kép sorszámból előállítja a JSON-ben használt kulcsot.
+        function getAnswerOptionsKey(pendingAnswer) {
+            return pendingAnswer.answerOptionsKey;
+        }
+
+        // Betölti az aktuális képhez tartozó országopciókat a külső JSON fájlból.
+        async function loadCountryOptions(pendingAnswer) {
+            try {
+                const response = await fetch(ANSWER_OPTIONS_PATH);
+                if (!response.ok) {
+                    throw new Error('Answer options JSON not found');
+                }
+
+                const optionsByImage = await response.json();
+                const key = getAnswerOptionsKey(pendingAnswer);
+                const options = optionsByImage[key];
+
+                if (!Array.isArray(options) || options.length < 2) {
+                    return DEFAULT_COUNTRY_OPTIONS;
+                }
+
+                state.correctCountryAnswer = String(options[options.length - 1] || '');
+                return options.slice(0, -1);
+            } catch (error) {
+                console.warn('ANSWER_OPTIONS_LOAD_FAILED', error);
+                return DEFAULT_COUNTRY_OPTIONS;
+            }
+        }
+
+        // Kirajzolja az országválasztó kártyákat.
+        function renderCountryOptions(countryOptions) {
+            elements.countryOptions.innerHTML = '';
+            countryOptions.forEach((country, index) => {
+                const button = document.createElement('button');
+                button.type = 'button';
+                button.textContent = country;
+                button.addEventListener('click', () => {
+                    if (state.isAnswerLocked) {
+                        return;
+                    }
+
+                    state.countryAnswer = country;
+                    state.selectedCountryIndex = index + 1;
+                    selectButton(elements.countryOptions, button);
+                    elements.confidenceTitle.classList.remove('answer-section-inactive');
+                    setConfidenceOptionsEnabled(true);
+                    updateSubmitState();
+                });
+                elements.countryOptions.appendChild(button);
+            });
+        }
+
+        // Kirajzolja az 1-10-es bizonyossági skálát.
+        function renderConfidenceOptions() {
+            for (let i = 1; i <= 5; i += 1) {
+                const button = document.createElement('button');
+                button.type = 'button';
+                button.textContent = String(i);
+                button.disabled = true;
+                button.addEventListener('click', () => {
+                    if (state.isAnswerLocked) {
+                        return;
+                    }
+
+                    state.confidence = i;
+                    selectButton(elements.confidenceOptions, button);
+                    lockAnswer();
+                });
+                elements.confidenceOptions.appendChild(button);
+            }
+        }
+
+        // A kiválasztott országot és bizonyosságot hozzáírja a korábban mentett heatmap eredményhez.
+        function saveAnswerToResult(pendingAnswer) {
+            const result = readJson(pendingAnswer.resultKey, null);
+            if (!result) {
+                return false;
+            }
+
+            result.countryAnswer = state.countryAnswer === state.correctCountryAnswer ? 1 : 0;
+            result.confidence = state.confidence;
+            result.answeredAt = new Date().toISOString();
+
+            localStorage.setItem(pendingAnswer.resultKey, JSON.stringify(result));
+            return true;
+        }
+
+        function buildSupabasePayload(result) {
+            return {
+                user_id: localStorage.getItem(STORAGE_KEYS.supabaseUserId),
+                username: result.username,
+                session_id: result.sessionId,
+                image_index: result.imageIndex,
+                image: result.image,
+                image_natural_width: result.imageNaturalWidth,
+                image_natural_height: result.imageNaturalHeight,
+                heatmap_width: result.heatmapWidth,
+                heatmap_height: result.heatmapHeight,
+                heatmap_resolution_scale: result.heatmapResolutionScale,
+                duration_ms: result.durationMs,
+                total_viewing_time_ms: result.totalViewingTimeMs,
+                total_reveal_time_ms: result.totalRevealTimeMs,
+                heatmap_values: result.values || [],
+                country_answer: result.countryAnswer === 1,
+                confidence: result.confidence,
+                completed_at: result.completedAt,
+                answered_at: result.answeredAt
+            };
+        }
+
+        async function saveResultToSupabase(pendingAnswer) {
+            if (!isSupabaseUserMode()) {
+                return true;
+            }
+
+            const result = readJson(pendingAnswer.resultKey, null);
+            if (!result) {
+                return false;
+            }
+
+            const { error } = await supabaseClient
+                .from('heatmap_results')
+                .upsert(buildSupabasePayload(result), {
+                    onConflict: 'user_id,session_id,image_index'
+                });
+
+            if (error) {
+                console.error('SUPABASE_RESULT_SAVE_FAILED', error);
+                alert('A Supabase mentés nem sikerült. Az adat lokálisan megmaradt, próbáld újra a Tovább gombbal.');
+                return false;
+            }
+
+            return true;
+        }
+
+        // A válasz mentése után lépteti a session progresszt a következő képre vagy kész állapotra.
+        function updateSessionProgress(pendingAnswer) {
+            const progress = loadProgress();
+            if (!progress) {
+                return null;
+            }
+
+            const session = progress.sessions.find((item) => item.id === pendingAnswer.sessionId);
+            if (!session) {
+                return null;
+            }
+
+            const totalImages = session.totalImages || 0;
+            const completed = Math.min(totalImages, (session.completedImages || 0) + 1);
+            session.completedImages = completed;
+
+            if (completed >= totalImages) {
+                session.status = 'completed';
+                session.nextImageIndex = 1;
+            } else {
+                session.status = 'in_progress';
+                session.nextImageIndex = completed + 1;
+            }
+
+            saveProgress(progress);
+            return session;
+        }
+
+        async function loadSupabaseSessionProgress(sessionId) {
+            let query = supabaseClient
+                .from('heatmap_results')
+                .select('image_index')
+                .eq('session_id', sessionId);
+
+            const userId = localStorage.getItem(STORAGE_KEYS.supabaseUserId);
+            if (userId) {
+                query = query.eq('user_id', userId);
+            }
+
+            const { data, error } = await query;
+
+            if (error) {
+                console.error('SUPABASE_PROGRESS_LOAD_FAILED', error);
+                return false;
+            }
+
+            const completedIndexes = new Set((data || []).map((row) => row.image_index));
+            const completedImages = Math.min(IMAGES_PER_SESSION, completedIndexes.size);
+
+            if (completedImages >= IMAGES_PER_SESSION) {
+                return {
+                    id: sessionId,
+                    completedImages,
+                    totalImages: IMAGES_PER_SESSION,
+                    nextImageIndex: 1,
+                    status: 'completed'
+                };
+            }
+
+            let nextImageIndex = 1;
+            for (let imageIndex = 1; imageIndex <= IMAGES_PER_SESSION; imageIndex += 1) {
+                if (!completedIndexes.has(imageIndex)) {
+                    nextImageIndex = imageIndex;
+                    break;
+                }
+            }
+
+            return {
+                id: sessionId,
+                completedImages,
+                totalImages: IMAGES_PER_SESSION,
+                nextImageIndex,
+                status: completedImages > 0 ? 'in_progress' : 'not_started'
+            };
+        }
+
+        // Eldönti, hogy válasz után újabb kép jön vagy vissza kell menni a session dashboardra.
+        function continueFlow(session) {
+            localStorage.removeItem(getPendingAnswerKey());
+
+            if (!session || session.status === 'completed') {
+                localStorage.removeItem(getCurrentSessionIdKey());
+                localStorage.removeItem(getLaunchTokenKey());
+                window.location.href = 'sessions.html';
+                return;
+            }
+
+            localStorage.setItem(getCurrentSessionIdKey(), String(session.id));
+            localStorage.setItem(getLaunchTokenKey(), '1');
+            window.location.href = 'guess.html';
+        }
+
+        async function saveAnswerAndUpdateProgress() {
+            const pendingAnswer = loadPendingAnswer();
+            if (!pendingAnswer || !pendingAnswer.resultKey) {
+                window.location.href = 'sessions.html';
+                return null;
+            }
+
+            if (!saveAnswerToResult(pendingAnswer)) {
+                return false;
+            }
+
+            if (!await saveResultToSupabase(pendingAnswer)) {
+                return false;
+            }
+
+            if (isSupabaseUserMode()) {
+                return await loadSupabaseSessionProgress(pendingAnswer.sessionId);
+            }
+
+            return updateSessionProgress(pendingAnswer);
+        }
+
+        // A Tovább gomb fő művelete: válasz mentése, progress frissítése, továbbirányítás.
+        async function submitAnswer() {
+            const session = await saveAnswerAndUpdateProgress();
+            if (session === false) {
+                return;
+            }
+
+            continueFlow(session);
+        }
+
+        async function returnToMenu() {
+            const session = await saveAnswerAndUpdateProgress();
+            if (session === false) {
+                return;
+            }
+
+            localStorage.removeItem(getPendingAnswerKey());
+            localStorage.removeItem(getCurrentSessionIdKey());
+            localStorage.removeItem(getLaunchTokenKey());
+            window.location.href = 'sessions.html';
+        }
+
+        // Induláskor ellenőrzi, hogy jogosan vagyunk-e a válaszoldalon, majd kirajzolja az opciókat.
+        async function init() {
+            if (!getUsername()) {
+                window.location.href = 'index.html';
+                return;
+            }
+
+            const pendingAnswer = loadPendingAnswer();
+            if (!pendingAnswer) {
+                window.location.href = 'sessions.html';
+                return;
+            }
+
+            const countryOptions = await loadCountryOptions(pendingAnswer);
+            renderCountryOptions(countryOptions);
+            renderConfidenceOptions();
+            setConfidenceOptionsEnabled(false);
+            elements.menuButton.addEventListener('click', returnToMenu);
+            elements.submitButton.addEventListener('click', submitAnswer);
+        }
+
+        init();
+    </script>
+</body>
+</html>
