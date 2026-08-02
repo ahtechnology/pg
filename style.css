@@ -1,12 +1,15 @@
 :root {
     color-scheme: dark;
+    --answer-selected-disabled-background: #909398;
     --session-hit-card-background: #111;
     --session-hit-card-color: #fff;
     --session-hit-card-font-size: 1.15rem;
+    --session-card-background: rgb(28, 65, 165);
     --session-card-disabled-background: rgba(32, 56, 120, 0.45);
+    --session-card-separated-background: rgb(0, 112, 101);
     --session-card-separated-disabled-background: rgba(19, 59, 55, 0.45);
-    --session-card-practice-background: #70286f;
-    --session-card-practice-disabled-background: rgba(117, 51, 155, 0.45);
+    --session-card-practice-background: rgb(74, 35, 112);
+    --session-card-practice-disabled-background: rgba(52, 30, 71, 0.45);
 }
 
 * {
@@ -272,8 +275,8 @@ body:has(.answer-page) {
 }
 
 .answer-options button.selected:disabled {
-    border-color: #2563eb;
-    background: #2563eb;
+    border-color: var(--answer-selected-disabled-background);
+    background: var(--answer-selected-disabled-background);
     color: #fff;
 }
 
@@ -339,13 +342,13 @@ body:has(.answer-page) {
     text-align: left;
     border: 1px solid #2a2a2a;
     border-radius: 12px;
-    background: #203878;
+    background: var(--session-card-background);
     color: #fff;
     padding: 14px;
 }
 
 .session-card-separated {
-    background: #133b37;
+    background: var(--session-card-separated-background);
 }
 
 .session-card-practice {
