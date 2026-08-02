@@ -66,6 +66,10 @@
             }
         }
 
+        function getLocalUser(username) {
+            return APP_CONFIG.localUsers[username.toLowerCase()] || null;
+        }
+
         async function signInWithSupabase(email, password) {
             const { data, error } = await supabaseClient.auth.signInWithPassword({
                 email,
@@ -94,15 +98,22 @@
                 return;
             }
 
-            if (username.toLowerCase() === 'admin') {
-                saveLocalUser(username);
-                window.location.href = 'admin.html';
-                return;
-            }
-
             if (!isEmailLike(username)) {
-                saveLocalUser(username);
-                rememberNormalUser(username);
+                const localUser = getLocalUser(username);
+                if (!localUser || localUser.password !== password) {
+                    alert('Sikertelen local belépés. Ellenőrizd a felhasználónevet és a jelszót.');
+                    return;
+                }
+
+                const normalizedUsername = username.toLowerCase();
+                saveLocalUser(normalizedUsername);
+
+                if (localUser.role === 'admin') {
+                    window.location.href = 'admin.html';
+                    return;
+                }
+
+                rememberNormalUser(normalizedUsername);
                 window.location.href = 'sessions.html';
                 return;
             }

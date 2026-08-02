@@ -1,5 +1,12 @@
 :root {
     color-scheme: dark;
+    --session-hit-card-background: #111;
+    --session-hit-card-color: #fff;
+    --session-hit-card-font-size: 1.15rem;
+    --session-card-disabled-background: rgba(32, 56, 120, 0.45);
+    --session-card-separated-disabled-background: rgba(19, 59, 55, 0.45);
+    --session-card-practice-background: #70286f;
+    --session-card-practice-disabled-background: rgba(117, 51, 155, 0.45);
 }
 
 * {
@@ -15,7 +22,7 @@ body {
     height: 100%;
     background: #111;
     color: #fff;
-    font-family: Arial, sans-serif;
+    font-family: Arial, Helvetica, sans-serif;
 }
 
 body {
@@ -324,10 +331,11 @@ body:has(.answer-page) {
 .sessions-grid {
     display: grid;
     gap: 12px;
-    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(330px, 1fr));
 }
 
 .session-card {
+    position: relative;
     text-align: left;
     border: 1px solid #2a2a2a;
     border-radius: 12px;
@@ -340,8 +348,53 @@ body:has(.answer-page) {
     background: #133b37;
 }
 
+.session-card-practice {
+    background: var(--session-card-practice-background);
+}
+
 .session-card-disabled {
+    opacity: 1;
+    background: var(--session-card-disabled-background);
+}
+
+.session-card-separated.session-card-disabled {
+    background: var(--session-card-separated-disabled-background);
+}
+
+.session-card-practice.session-card-disabled {
+    background: var(--session-card-practice-disabled-background);
+}
+
+.session-card-disabled h2,
+.session-card-disabled > p,
+.session-card-disabled .session-actions {
     opacity: 0.45;
+}
+
+.session-hit-card {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    display: grid;
+    gap: 2px;
+    min-width: 72px;
+    padding: 8px 10px;
+    border-radius: 10px;
+    background: var(--session-hit-card-background);
+    color: var(--session-hit-card-color);
+    text-align: center;
+    font-size: var(--session-hit-card-font-size);
+    font-weight: 700;
+    line-height: 1.1;
+}
+
+.session-hit-label {
+    font-size: 0.8em;
+}
+
+.session-hit-value {
+    color: var(--session-hit-card-color);
+    font-size: 1em;
 }
 
 .session-card h2 {
@@ -364,7 +417,8 @@ body:has(.answer-page) {
 }
 
 .session-start-button,
-.session-reset-button {
+.session-reset-button,
+.session-skip-button {
     min-height: 38px;
     padding: 0 12px;
     border: none;
@@ -388,6 +442,11 @@ body:has(.answer-page) {
 .session-reset-button {
     background: #7f1d1d;
     color: #fff;
+}
+
+.session-skip-button {
+    background: #f59e0b;
+    color: #111;
 }
 
 .status-not_started {

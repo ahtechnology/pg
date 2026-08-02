@@ -40,10 +40,12 @@
             doubleTapMaxGapMs: 300,
             revealDiameterHeightRatio: 0.125,
             revealRadiusMinPx: 12,
+            revealPointerOffsetRadiusRatioX: 1.5,
+            revealPointerOffsetRadiusRatioY: 1.5,
             revealInterpolationStepRatio: 0.5,
             revealWeightFalloffStartRatio: 0.5,
             revealWeightEdgeMinRatio: 0,
-            blurAmount: '10px'
+            blurAmount: '6px'
         };
 
         // Az alkalmazás aktuális futási állapota az éppen nézett képre.
@@ -104,6 +106,13 @@
                 .sort();
 
             return keys[imageIndex - 1];
+        }
+
+        function getSessionImageCount(sessionId) {
+            const sessionFolder = String(sessionId).padStart(3, '0');
+            return Object.keys(answerOptionsByImage || {})
+                .filter((key) => key.startsWith(`${sessionFolder}/`))
+                .length;
         }
 
         // Összerakja az adott session adott képének fájlútvonalát.
@@ -241,7 +250,8 @@
             }
 
             const completedIndexes = new Set((data || []).map((row) => row.image_index));
-            for (let imageIndex = 1; imageIndex <= APP_CONFIG.imagesPerSession; imageIndex += 1) {
+            const totalImages = getSessionImageCount(sessionId);
+            for (let imageIndex = 1; imageIndex <= totalImages; imageIndex += 1) {
                 if (!completedIndexes.has(imageIndex)) {
                     return imageIndex;
                 }
@@ -257,6 +267,8 @@
                 window.location.href = 'index.html';
                 return false;
             }
+
+            await loadAnswerOptionsMap();
 
             const launchToken = localStorage.getItem(getLaunchTokenKey());
             if (launchToken !== '1') {
@@ -702,8 +714,8 @@
         // A pointer pozíciójából kiszámolja a reveal kör középpontját.
         function getRevealCenterFromPointer(x, y) {
             return {
-                x: x - state.revealRadiusPx,
-                y: y - state.revealRadiusPx
+                x: x - (state.revealRadiusPx * CONFIG.revealPointerOffsetRadiusRatioX),
+                y: y - (state.revealRadiusPx * CONFIG.revealPointerOffsetRadiusRatioY)
             };
         }
 

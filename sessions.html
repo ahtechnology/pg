@@ -9,7 +9,7 @@
 <body>
     <main class="sessions-page" aria-label="Session áttekintő">
         <header class="sessions-header">
-            <h1>Áttekintő</h1>
+            <h1>PlaceGuess</h1>
             <p id="sessions-user"></p>
         </header>
 
@@ -28,22 +28,78 @@
             sessionsGrid: document.getElementById('sessions-grid')
         };
 
-        // Létrehozza az alap session-progress állapotot új felhasználó esetén.
-        function createDefaultProgress() {
-            const sessions = [];
+        let answerOptionsByImage = null;
 
-            for (let i = 1; i <= APP_CONFIG.totalSessions; i += 1) {
-                sessions.push({
-                    id: i,
-                    title: `Nap #${i}`,
-                    completedImages: 0,
-                    totalImages: APP_CONFIG.imagesPerSession,
-                    nextImageIndex: 1,
-                    status: 'not_started'
-                });
+        async function loadAnswerOptionsMap() {
+            if (answerOptionsByImage) {
+                return answerOptionsByImage;
             }
 
+            const response = await fetch('assets/images/answer-options.json');
+            if (!response.ok) {
+                throw new Error('Answer options JSON not found');
+            }
+
+            answerOptionsByImage = await response.json();
+            return answerOptionsByImage;
+        }
+
+        function getSessionImageKeys(sessionId) {
+            const sessionFolder = String(sessionId).padStart(3, '0');
+            return Object.keys(answerOptionsByImage || {})
+                .filter((key) => key.startsWith(`${sessionFolder}/`))
+                .sort();
+        }
+
+        function getSessionIdsFromAnswerOptions() {
+            return [...new Set(
+                Object.keys(answerOptionsByImage || {})
+                    .map((key) => Number.parseInt(key.split('/')[0], 10))
+                    .filter(Number.isFinite)
+            )].sort((a, b) => a - b);
+        }
+
+        // Létrehozza az alap session-progress állapotot új felhasználó esetén.
+        function createDefaultProgress() {
+            const sessions = getSessionIdsFromAnswerOptions().map((i) => {
+                const totalImages = getSessionImageKeys(i).length;
+                return {
+                    id: i,
+                    title: i === 0 ? 'Gyakorlás' : `Nap #${i}`,
+                    completedImages: 0,
+                    totalImages,
+                    correctAnswers: 0,
+                    nextImageIndex: 1,
+                    status: 'not_started'
+                };
+            });
+
             return { sessions };
+        }
+
+        function normalizeProgress(progress) {
+            const normalized = createDefaultProgress();
+
+            normalized.sessions.forEach((session) => {
+                const existing = progress.sessions.find((item) => item.id === session.id);
+                if (!existing) {
+                    return;
+                }
+
+                session.completedImages = Math.min(session.totalImages, existing.completedImages || 0);
+                session.correctAnswers = existing.correctAnswers || 0;
+
+                if (session.completedImages >= session.totalImages) {
+                    session.status = 'completed';
+                    session.nextImageIndex = 1;
+                    return;
+                }
+
+                session.status = session.completedImages > 0 ? 'in_progress' : 'not_started';
+                session.nextImageIndex = Math.min(session.totalImages, Math.max(1, existing.nextImageIndex || 1));
+            });
+
+            return normalized;
         }
 
         // Betölti az aktuális felhasználó session állapotát, vagy létrehozza, ha még nincs.
@@ -62,7 +118,7 @@
                 if (!parsed || !Array.isArray(parsed.sessions)) {
                     throw new Error('Invalid progress');
                 }
-                return parsed;
+                return normalizeProgress(parsed);
             } catch {
                 const fallback = createDefaultProgress();
                 localStorage.setItem(progressKey, JSON.stringify(fallback));
@@ -86,6 +142,9 @@
                 );
 
                 session.completedImages = Math.min(session.totalImages, completedIndexes.size);
+                session.correctAnswers = rows
+                    .filter((row) => row.session_id === session.id && row.country_answer === true)
+                    .length;
 
                 if (session.completedImages >= session.totalImages) {
                     session.status = 'completed';
@@ -109,7 +168,7 @@
         async function loadSupabaseProgress() {
             let query = supabaseClient
                 .from('heatmap_results')
-                .select('session_id, image_index');
+                .select('session_id, image_index, country_answer');
 
             const userId = getSupabaseUserId();
             if (userId) {
@@ -128,6 +187,7 @@
         }
 
         async function loadProgressForCurrentMode() {
+            await loadAnswerOptionsMap();
             return isSupabaseMode() ? await loadSupabaseProgress() : loadProgress();
         }
 
@@ -181,6 +241,83 @@
             return 'Nem kezdett';
         }
 
+        function getLocalCorrectAnswers(sessionId) {
+            const parsedIndex = readJson(getResultIndexKey(), []);
+            const index = Array.isArray(parsedIndex) ? parsedIndex : [];
+            const prefix = getResultPrefix(sessionId);
+
+            return index
+                .filter((key) => key.startsWith(prefix))
+                .reduce((total, key) => {
+                    const result = readJson(key, null);
+                    return total + (result && result.countryAnswer === 1 ? 1 : 0);
+                }, 0);
+        }
+
+        function saveSimulatedResult(sessionId, imageIndex, index) {
+            const key = getResultKey(sessionId, imageIndex);
+            const existingResult = readJson(key, null);
+
+            if (existingResult) {
+                if (!index.includes(key)) {
+                    index.push(key);
+                }
+                return;
+            }
+
+            const now = new Date().toISOString();
+            localStorage.setItem(key, JSON.stringify({
+                username: getUsername(),
+                sessionId,
+                imageIndex,
+                image: '',
+                imageNaturalWidth: 1,
+                imageNaturalHeight: 1,
+                heatmapWidth: 1,
+                heatmapHeight: 1,
+                heatmapResolutionScale: 1,
+                durationMs: APP_CONFIG.imageDurationMs,
+                totalViewingTimeMs: 0,
+                totalRevealTimeMs: 0,
+                values: [0],
+                countryAnswer: 1,
+                confidence: 5,
+                completedAt: now,
+                answeredAt: now
+            }));
+
+            if (!index.includes(key)) {
+                index.push(key);
+            }
+        }
+
+        function skipSession(sessionId) {
+            const progress = loadProgress();
+            const session = progress.sessions.find((item) => item.id === sessionId);
+            if (!session) {
+                return;
+            }
+
+            const parsedIndex = readJson(getResultIndexKey(), []);
+            const index = Array.isArray(parsedIndex) ? parsedIndex : [];
+
+            for (let imageIndex = 1; imageIndex <= session.totalImages; imageIndex += 1) {
+                saveSimulatedResult(sessionId, imageIndex, index);
+            }
+
+            localStorage.setItem(getResultIndexKey(), JSON.stringify(index));
+
+            session.completedImages = session.totalImages;
+            session.correctAnswers = getLocalCorrectAnswers(sessionId);
+            session.nextImageIndex = 1;
+            session.status = 'completed';
+
+            localStorage.removeItem(getCurrentSessionIdKey());
+            localStorage.removeItem(getLaunchTokenKey());
+            saveProgress(progress);
+            renderSessions();
+        }
+
         // Megkeresi az első még nem kész sessiont; csak ez indítható.
         function getCurrentSessionId(sessions) {
             const next = sessions.find((session) => session.status !== 'completed');
@@ -206,12 +343,20 @@
                 card.className = 'session-card';
                 const isActive = session.id === currentSessionId;
                 const isSeparated = session.id >= APP_CONFIG.conditionSeparation;
+                const isPractice = session.id === 0;
                 const resetButtonHtml = isSupabaseMode()
                     ? ''
                     : '<button class="session-reset-button" type="button">Reset</button>';
+                const skipButtonHtml = isSupabaseMode()
+                    ? ''
+                    : '<button class="session-skip-button" type="button">Skip</button>';
 
                 if (isSeparated) {
                     card.classList.add('session-card-separated');
+                }
+
+                if (isPractice) {
+                    card.classList.add('session-card-practice');
                 }
 
                 if (!isActive) {
@@ -220,13 +365,24 @@
 
                 const statusClass = `status-${session.status}`;
                 const startLabel = session.status === 'in_progress' ? 'Folytatás' : 'Indítás';
+                const correctAnswers = isSupabaseMode() ? (session.correctAnswers || 0) : getLocalCorrectAnswers(session.id);
+                const hitCardHtml = session.status === 'not_started'
+                    ? ''
+                    : `
+                        <div class="session-hit-card" aria-label="Találati arány">
+                            <span class="session-hit-label">Találat:</span>
+                            <strong class="session-hit-value">${correctAnswers} / ${session.totalImages}</strong>
+                        </div>
+                    `;
 
                 card.innerHTML = `
-                    <h2>${session.title}</h2>
+                    ${hitCardHtml}
+                    <h2>${session.title} <span class="session-status ${statusClass}">&nbsp;&nbsp;&nbsp;${getStatusLabel(session.status)}</span></h2>
                     <p>${session.completedImages} / ${session.totalImages} kép kész</p>
-                    <p class="session-status ${statusClass}">${getStatusLabel(session.status)}</p>
+                    
                     <div class="session-actions">
                         <button class="session-start-button" type="button" ${isActive ? '' : 'disabled'}>${startLabel}</button>
+                        ${skipButtonHtml}
                         ${resetButtonHtml}
                     </div>
                 `;
@@ -245,6 +401,13 @@
                 if (resetButton) {
                     resetButton.addEventListener('click', () => {
                         resetSession(session.id);
+                    });
+                }
+
+                const skipButton = card.querySelector('.session-skip-button');
+                if (skipButton) {
+                    skipButton.addEventListener('click', () => {
+                        skipSession(session.id);
                     });
                 }
 

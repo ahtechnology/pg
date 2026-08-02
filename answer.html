@@ -31,7 +31,7 @@
         // Alapértelmezett válaszopciók, ha a külső JSON nem tölthető be.
         const DEFAULT_COUNTRY_OPTIONS = ['A', 'B'];
         const ANSWER_OPTIONS_PATH = 'assets/images/answer-options.json';
-        const IMAGES_PER_SESSION = APP_CONFIG.imagesPerSession;
+        let answerOptionsByImage = null;
 
         // A felhasználó aktuális választásait tárolja a Tovább gomb megnyomásáig.
         const state = {
@@ -72,6 +72,27 @@
 
         function saveProgress(progress) {
             localStorage.setItem(getProgressKey(), JSON.stringify(progress));
+        }
+
+        async function loadAnswerOptionsMap() {
+            if (answerOptionsByImage) {
+                return answerOptionsByImage;
+            }
+
+            const response = await fetch(ANSWER_OPTIONS_PATH);
+            if (!response.ok) {
+                throw new Error('Answer options JSON not found');
+            }
+
+            answerOptionsByImage = await response.json();
+            return answerOptionsByImage;
+        }
+
+        function getSessionImageCount(sessionId) {
+            const sessionFolder = String(sessionId).padStart(3, '0');
+            return Object.keys(answerOptionsByImage || {})
+                .filter((key) => key.startsWith(`${sessionFolder}/`))
+                .length;
         }
 
         // Engedélyezi a Tovább gombot, ha már van ország és bizonyosság választás is.
@@ -120,7 +141,7 @@
             state.isAnswerLocked = true;
             setCountryOptionsEnabled(false);
             setConfidenceOptionsEnabled(false);
-            setTimeout(showCorrectAnswer, 1200);
+            setTimeout(showCorrectAnswer, 1000);
         }
 
         // A session/kép sorszámból előállítja a JSON-ben használt kulcsot.
@@ -131,12 +152,7 @@
         // Betölti az aktuális képhez tartozó országopciókat a külső JSON fájlból.
         async function loadCountryOptions(pendingAnswer) {
             try {
-                const response = await fetch(ANSWER_OPTIONS_PATH);
-                if (!response.ok) {
-                    throw new Error('Answer options JSON not found');
-                }
-
-                const optionsByImage = await response.json();
+                const optionsByImage = await loadAnswerOptionsMap();
                 const key = getAnswerOptionsKey(pendingAnswer);
                 const options = optionsByImage[key];
 
@@ -270,7 +286,8 @@
                 return null;
             }
 
-            const totalImages = session.totalImages || 0;
+            const totalImages = getSessionImageCount(pendingAnswer.sessionId);
+            session.totalImages = totalImages;
             const completed = Math.min(totalImages, (session.completedImages || 0) + 1);
             session.completedImages = completed;
 
@@ -305,20 +322,21 @@
             }
 
             const completedIndexes = new Set((data || []).map((row) => row.image_index));
-            const completedImages = Math.min(IMAGES_PER_SESSION, completedIndexes.size);
+            const totalImages = getSessionImageCount(sessionId);
+            const completedImages = Math.min(totalImages, completedIndexes.size);
 
-            if (completedImages >= IMAGES_PER_SESSION) {
+            if (completedImages >= totalImages) {
                 return {
                     id: sessionId,
                     completedImages,
-                    totalImages: IMAGES_PER_SESSION,
+                    totalImages,
                     nextImageIndex: 1,
                     status: 'completed'
                 };
             }
 
             let nextImageIndex = 1;
-            for (let imageIndex = 1; imageIndex <= IMAGES_PER_SESSION; imageIndex += 1) {
+            for (let imageIndex = 1; imageIndex <= totalImages; imageIndex += 1) {
                 if (!completedIndexes.has(imageIndex)) {
                     nextImageIndex = imageIndex;
                     break;
@@ -328,7 +346,7 @@
             return {
                 id: sessionId,
                 completedImages,
-                totalImages: IMAGES_PER_SESSION,
+                totalImages,
                 nextImageIndex,
                 status: completedImages > 0 ? 'in_progress' : 'not_started'
             };
