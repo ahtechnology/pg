@@ -1,8 +1,8 @@
 window.APP_CONFIG = Object.freeze({
-    conditionSeparation: 11,
+    conditionSeparation: 8,
     //totalSessions: 15,  // nem számít
     //imagesPerSession: 9,  // nem számít
-    imageDurationMs: 30000,
+    imageDurationMs: 20000,
     //supabaseUrl: 'https://ofncvazlwzanexavgnur.supabase.co',
     //supabaseAnonKey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9mbmN2YXpsd3phbmV4YXZnbnVyIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQ0NjUyNzIsImV4cCI6MjEwMDA0MTI3Mn0.xKBZOgjZc6lcpk5Ubp9nX69z3POUb-o9RGlkEzTh2MU',
     supabaseUrl: 'https://asfiryvbysugacifjkhm.supabase.co',
