@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-    <title>Self Heatmap - Guess</title>
+    <title>PlaceGuess - Kép</title>
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -45,6 +45,7 @@
             revealInterpolationStepRatio: 0.5,
             revealWeightFalloffStartRatio: 0.5,
             revealWeightEdgeMinRatio: 0,
+            bottomPointerBufferPx: 200,
             blurAmount: '6px'
         };
 
@@ -136,6 +137,7 @@
         // Kiszámolja, hogy az object-fit: contain miatt a kép pontosan hol látszik a stage-en belül.
         function getRenderedImageRect() {
             const stageRect = elements.imageStage.getBoundingClientRect();
+            const imageAreaHeight = Math.max(1, stageRect.height - CONFIG.bottomPointerBufferPx);
             const imageWidth = elements.blurredImage.naturalWidth;
             const imageHeight = elements.blurredImage.naturalHeight;
 
@@ -144,11 +146,11 @@
                     x: 0,
                     y: 0,
                     width: Math.max(1, stageRect.width),
-                    height: Math.max(1, stageRect.height)
+                    height: imageAreaHeight
                 };
             }
 
-            const stageRatio = stageRect.width / stageRect.height;
+            const stageRatio = stageRect.width / imageAreaHeight;
             const imageRatio = imageWidth / imageHeight;
 
             if (imageRatio > stageRatio) {
@@ -156,13 +158,13 @@
                 const height = width / imageRatio;
                 return {
                     x: 0,
-                    y: (stageRect.height - height) / 2,
+                    y: (imageAreaHeight - height) / 2,
                     width,
                     height
                 };
             }
 
-            const height = stageRect.height;
+            const height = imageAreaHeight;
             const width = height * imageRatio;
             return {
                 x: (stageRect.width - width) / 2,
@@ -409,7 +411,7 @@
                 return;
             }
 
-            if (!isPointInsideRenderedImage(sampleX, sampleY)) {
+            if (!doesRevealCircleTouchRenderedImage(sampleX, sampleY)) {
                 return;
             }
 
@@ -422,10 +424,6 @@
             const radiusInGridY = (state.revealRadiusPx / stageHeight) * state.heatmapHeight;
             const localX = revealCenter.x - renderedRect.x;
             const localY = revealCenter.y - renderedRect.y;
-
-            if (localX < 0 || localY < 0 || localX > stageWidth || localY > stageHeight) {
-                return;
-            }
 
             const centerGridX = (localX / stageWidth) * state.heatmapWidth;
             const centerGridY = (localY / stageHeight) * state.heatmapHeight;
@@ -727,11 +725,25 @@
             return { x, y };
         }
 
-        // Megmondja, hogy egy pont a ténylegesen látható képterületen belül van-e.
+        function doesRevealCircleTouchRenderedImage(x, y) {
+            const revealCenter = getRevealCenterFromPointer(x, y);
+            const renderedRect = getRenderedImageRect();
+
+            return revealCenter.x + state.revealRadiusPx >= renderedRect.x
+                && revealCenter.x - state.revealRadiusPx <= (renderedRect.x + renderedRect.width)
+                && revealCenter.y + state.revealRadiusPx >= renderedRect.y
+                && revealCenter.y - state.revealRadiusPx <= (renderedRect.y + renderedRect.height);
+        }
+
         function isPointInsideRenderedImage(x, y) {
             const renderedRect = getRenderedImageRect();
+
             return x >= renderedRect.x && x <= (renderedRect.x + renderedRect.width)
                 && y >= renderedRect.y && y <= (renderedRect.y + renderedRect.height);
+        }
+
+        function canStartRevealAtPoint(x, y) {
+            return isPointInsideRenderedImage(x, y) || doesRevealCircleTouchRenderedImage(x, y);
         }
 
         // Pointer lenyomásakor aktiválja a reveal kört, ha a kép felületén indult.
@@ -743,7 +755,7 @@
             elements.imageStage.setPointerCapture(event.pointerId);
             const { x, y } = getLocalPoint(event);
 
-            if (!isPointInsideRenderedImage(x, y)) {
+            if (!canStartRevealAtPoint(x, y)) {
                 state.isPointerActive = false;
                 hideRevealCircle();
                 return;
@@ -825,6 +837,7 @@
 
         // Alaphelyzetbe állítja a vizuális rétegeket induláskor.
         function initLayout() {
+            document.documentElement.style.setProperty('--bottom-pointer-buffer', `${CONFIG.bottomPointerBufferPx}px`);
             updateTimerVisual(0);
             elements.heatmapOverlay.style.display = 'none';
             elements.sharpImage.style.display = 'block';
