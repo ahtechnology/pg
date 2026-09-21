@@ -9,7 +9,10 @@
 <body>
     <main class="sessions-page" aria-label="Session áttekintő">
         <header class="sessions-header">
-            <h1>PlaceGuess</h1>
+            <div style="display: flex; justify-content: space-between;">
+                <h1>PlaceGuess</h1>
+                <a href="/index.html" style="text-decoration: none; color: white; margin: 8px;">Exit</a>
+            </div>
             <p id="sessions-user"></p>
         </header>
 
@@ -35,7 +38,7 @@
                 return answerOptionsByImage;
             }
 
-            const response = await fetch('assets/images/answer-options.json');
+            const response = await fetch(getAnswerOptionsPathForUsername(getUsername()));
             if (!response.ok) {
                 throw new Error('Answer options JSON not found');
             }

@@ -9,7 +9,10 @@
 <body>
     <main class="admin-page" aria-label="Admin dashboard">
         <header class="admin-header">
-            <h1>Admin Dashboard</h1>
+            <div style="display: flex; justify-content: space-between;">
+                <h1>Admin Dashboard</h1>
+                <a href="/index.html" style="text-decoration: none; color: white; margin: 8px;">Exit</a>
+            </div>
             <p>Lokális tesztadatok áttekintése</p>
         </header>
 
@@ -38,8 +41,6 @@
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <script>
         const supabaseClient = window.supabase.createClient(APP_CONFIG.supabaseUrl, APP_CONFIG.supabaseAnonKey);
-        const ANSWER_OPTIONS_PATH = 'assets/images/answer-options.json';
-
         // Az admin oldal gyakran használt DOM elemei.
         const elements = {
             users: document.getElementById('admin-users'),
@@ -52,34 +53,40 @@
         let currentResults = [];
         let allSupabaseResults = [];
         let currentUsername = '';
-        let answerOptionsByImage = null;
+        const answerOptionsByUsername = {};
 
-        async function loadAnswerOptionsMap() {
-            if (answerOptionsByImage) {
-                return answerOptionsByImage;
+        async function loadAnswerOptionsMapForUsername(username) {
+            const normalizedUsername = (username || '').trim().toLowerCase();
+            if (answerOptionsByUsername[normalizedUsername]) {
+                return answerOptionsByUsername[normalizedUsername];
             }
 
-            const response = await fetch(ANSWER_OPTIONS_PATH);
+            const response = await fetch(getAnswerOptionsPathForUsername(username));
             if (!response.ok) {
                 throw new Error('Answer options JSON not found');
             }
 
-            answerOptionsByImage = await response.json();
-            return answerOptionsByImage;
+            answerOptionsByUsername[normalizedUsername] = await response.json();
+            return answerOptionsByUsername[normalizedUsername];
         }
 
-        function getAnswerOptionsKey(sessionId, imageIndex) {
+        function getAnswerOptionsKey(sessionId, imageIndex, optionsByImage) {
             const sessionFolder = String(sessionId).padStart(3, '0');
-            const keys = Object.keys(answerOptionsByImage)
+            const keys = Object.keys(optionsByImage)
                 .filter((key) => key.startsWith(`${sessionFolder}/`))
                 .sort();
 
             return keys[imageIndex - 1];
         }
 
-        function getImagePath(result) {
+        async function getImagePath(result) {
+            if (result.image) {
+                return result.image;
+            }
+
+            const optionsByImage = await loadAnswerOptionsMapForUsername(result.username);
             const sessionFolder = String(result.sessionId).padStart(3, '0');
-            const answerOptionsKey = getAnswerOptionsKey(result.sessionId, result.imageIndex);
+            const answerOptionsKey = getAnswerOptionsKey(result.sessionId, result.imageIndex, optionsByImage);
             const fileName = answerOptionsKey.split('/')[1];
             return `assets/images/${sessionFolder}/${fileName}`;
         }
@@ -306,7 +313,9 @@
         }
 
         // Létrehoz egy canvas képet, amin az eredeti kép és a heatmap már össze van olvasztva.
-        function createMergedCanvas(result, scaleMode = 'normalized') {
+        async function createMergedCanvas(result, scaleMode = 'normalized') {
+            const imagePath = await getImagePath(result);
+
             return new Promise((resolve, reject) => {
                 const width = result.imageNaturalWidth || 1280;
                 const height = result.imageNaturalHeight || 720;
@@ -323,7 +332,7 @@
                 };
 
                 image.onerror = reject;
-                image.src = getImagePath(result);
+                image.src = imagePath;
             });
         }
 
@@ -501,8 +510,6 @@
         }
 
         async function initAdmin() {
-            await loadAnswerOptionsMap();
-
             if (isSupabaseAdminMode()) {
                 document.querySelector('.admin-header p').textContent = 'Supabase eredmények áttekintése';
                 await loadSupabaseResults();

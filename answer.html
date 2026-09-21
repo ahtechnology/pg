@@ -30,7 +30,6 @@
 
         // Alapértelmezett válaszopciók, ha a külső JSON nem tölthető be.
         const DEFAULT_COUNTRY_OPTIONS = ['A', 'B'];
-        const ANSWER_OPTIONS_PATH = 'assets/images/answer-options.json';
         let answerOptionsByImage = null;
 
         // A felhasználó aktuális választásait tárolja a Tovább gomb megnyomásáig.
@@ -79,7 +78,7 @@
                 return answerOptionsByImage;
             }
 
-            const response = await fetch(ANSWER_OPTIONS_PATH);
+            const response = await fetch(getAnswerOptionsPathForUsername(getUsername()));
             if (!response.ok) {
                 throw new Error('Answer options JSON not found');
             }

@@ -28,8 +28,6 @@
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <script>
         const supabaseClient = window.supabase.createClient(APP_CONFIG.supabaseUrl, APP_CONFIG.supabaseAnonKey);
-        const ANSWER_OPTIONS_PATH = 'assets/images/answer-options.json';
-
         // A képnéző oldal alap beállításai: időzítés, blur, reveal kör és heatmap részletesség.
         const CONFIG = {
             initialImageIndex: 1,
@@ -91,7 +89,7 @@
                 return answerOptionsByImage;
             }
 
-            const response = await fetch(ANSWER_OPTIONS_PATH);
+            const response = await fetch(getAnswerOptionsPathForUsername(getUsername()));
             if (!response.ok) {
                 throw new Error('Answer options JSON not found');
             }

@@ -13,6 +13,14 @@ window.APP_CONFIG = Object.freeze({
             password: '456',
             role: 'admin'
         }),
+        atestuser: Object.freeze({
+            password: '123',
+            role: 'user'
+        }),
+        btestuser: Object.freeze({
+            password: '123',
+            role: 'user'
+        }),
         testuser: Object.freeze({
             password: '123',
             role: 'user'

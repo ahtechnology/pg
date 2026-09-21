@@ -11,6 +11,20 @@ window.getUsername = function getUsername() {
     return (localStorage.getItem(STORAGE_KEYS.username) || '').trim();
 };
 
+window.getAnswerOptionsPathForUsername = function getAnswerOptionsPathForUsername(username) {
+    const normalizedUsername = (username || '').trim().toLowerCase();
+
+    if (normalizedUsername.startsWith('a')) {
+        return 'assets/images/answer-options-a.json';
+    }
+
+    if (normalizedUsername.startsWith('b')) {
+        return 'assets/images/answer-options-b.json';
+    }
+
+    return 'assets/images/answer-options.json';
+};
+
 window.isSupabaseMode = function isSupabaseMode() {
     return localStorage.getItem(STORAGE_KEYS.authMode) === 'supabase';
 };
