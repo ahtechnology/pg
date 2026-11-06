@@ -25,6 +25,29 @@ window.getAnswerOptionsPathForUsername = function getAnswerOptionsPathForUsernam
     return 'assets/images/answer-options.json';
 };
 
+window.getSessionDefinitions = function getSessionDefinitions(answerOptionsByImage) {
+    const sessionsByFolder = new Map();
+
+    Object.keys(answerOptionsByImage || {}).forEach((key) => {
+        const separatorIndex = key.indexOf('/');
+        if (separatorIndex <= 0) {
+            return;
+        }
+
+        const folder = key.slice(0, separatorIndex);
+        if (!sessionsByFolder.has(folder)) {
+            sessionsByFolder.set(folder, {
+                id: sessionsByFolder.size,
+                imageKeys: []
+            });
+        }
+
+        sessionsByFolder.get(folder).imageKeys.push(key);
+    });
+
+    return [...sessionsByFolder.values()];
+};
+
 window.isSupabaseMode = function isSupabaseMode() {
     return localStorage.getItem(STORAGE_KEYS.authMode) === 'supabase';
 };

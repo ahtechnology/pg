@@ -99,27 +99,19 @@
         }
 
         function getAnswerOptionsKey(sessionId, imageIndex) {
-            const sessionFolder = String(sessionId).padStart(3, '0');
-            const keys = Object.keys(answerOptionsByImage)
-                .filter((key) => key.startsWith(`${sessionFolder}/`))
-                .sort();
-
-            return keys[imageIndex - 1];
+            const session = getSessionDefinitions(answerOptionsByImage)[sessionId];
+            return session ? session.imageKeys[imageIndex - 1] : null;
         }
 
         function getSessionImageCount(sessionId) {
-            const sessionFolder = String(sessionId).padStart(3, '0');
-            return Object.keys(answerOptionsByImage || {})
-                .filter((key) => key.startsWith(`${sessionFolder}/`))
-                .length;
+            const session = getSessionDefinitions(answerOptionsByImage)[sessionId];
+            return session ? session.imageKeys.length : 0;
         }
 
         // Összerakja az adott session adott képének fájlútvonalát.
         function getImagePath(sessionId, imageIndex) {
-            const sessionFolder = String(sessionId).padStart(3, '0');
             const answerOptionsKey = getAnswerOptionsKey(sessionId, imageIndex);
-            const fileName = answerOptionsKey.split('/')[1];
-            return `assets/images/${sessionFolder}/${fileName}`;
+            return answerOptionsKey ? `assets/images/${answerOptionsKey}` : '';
         }
 
         // Előre betölt egy képet, és hibát jelez, ha nem található.

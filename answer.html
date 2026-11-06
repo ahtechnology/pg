@@ -88,10 +88,8 @@
         }
 
         function getSessionImageCount(sessionId) {
-            const sessionFolder = String(sessionId).padStart(3, '0');
-            return Object.keys(answerOptionsByImage || {})
-                .filter((key) => key.startsWith(`${sessionFolder}/`))
-                .length;
+            const session = getSessionDefinitions(answerOptionsByImage)[sessionId];
+            return session ? session.imageKeys.length : 0;
         }
 
         // Engedélyezi a Tovább gombot, ha már van ország és bizonyosság választás is.

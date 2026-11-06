@@ -71,12 +71,8 @@
         }
 
         function getAnswerOptionsKey(sessionId, imageIndex, optionsByImage) {
-            const sessionFolder = String(sessionId).padStart(3, '0');
-            const keys = Object.keys(optionsByImage)
-                .filter((key) => key.startsWith(`${sessionFolder}/`))
-                .sort();
-
-            return keys[imageIndex - 1];
+            const session = getSessionDefinitions(optionsByImage)[sessionId];
+            return session ? session.imageKeys[imageIndex - 1] : null;
         }
 
         async function getImagePath(result) {
@@ -85,10 +81,8 @@
             }
 
             const optionsByImage = await loadAnswerOptionsMapForUsername(result.username);
-            const sessionFolder = String(result.sessionId).padStart(3, '0');
             const answerOptionsKey = getAnswerOptionsKey(result.sessionId, result.imageIndex, optionsByImage);
-            const fileName = answerOptionsKey.split('/')[1];
-            return `assets/images/${sessionFolder}/${fileName}`;
+            return answerOptionsKey ? `assets/images/${answerOptionsKey}` : '';
         }
 
         function isSupabaseAdminMode() {

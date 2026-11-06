@@ -47,28 +47,13 @@
             return answerOptionsByImage;
         }
 
-        function getSessionImageKeys(sessionId) {
-            const sessionFolder = String(sessionId).padStart(3, '0');
-            return Object.keys(answerOptionsByImage || {})
-                .filter((key) => key.startsWith(`${sessionFolder}/`))
-                .sort();
-        }
-
-        function getSessionIdsFromAnswerOptions() {
-            return [...new Set(
-                Object.keys(answerOptionsByImage || {})
-                    .map((key) => Number.parseInt(key.split('/')[0], 10))
-                    .filter(Number.isFinite)
-            )].sort((a, b) => a - b);
-        }
-
         // Létrehozza az alap session-progress állapotot új felhasználó esetén.
         function createDefaultProgress() {
-            const sessions = getSessionIdsFromAnswerOptions().map((i) => {
-                const totalImages = getSessionImageKeys(i).length;
+            const sessions = getSessionDefinitions(answerOptionsByImage).map((definition) => {
+                const totalImages = definition.imageKeys.length;
                 return {
-                    id: i,
-                    title: i === 0 ? 'Gyakorlás' : `${i}. nap`,
+                    id: definition.id,
+                    title: definition.id === 0 ? 'Gyakorlás' : `${definition.id}. nap`,
                     completedImages: 0,
                     totalImages,
                     correctAnswers: 0,
