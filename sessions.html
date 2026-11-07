@@ -76,6 +76,7 @@
 
                 session.completedImages = Math.min(session.totalImages, existing.completedImages || 0);
                 session.correctAnswers = existing.correctAnswers || 0;
+                session.completedAt = existing.completedAt || null;
 
                 if (session.completedImages >= session.totalImages) {
                     session.status = 'completed';
@@ -123,20 +124,22 @@
             const progress = createDefaultProgress();
 
             progress.sessions.forEach((session) => {
-                const completedIndexes = new Set(
-                    rows
-                        .filter((row) => row.session_id === session.id)
-                        .map((row) => row.image_index)
-                );
+                const sessionRows = rows.filter((row) => row.session_id === session.id);
+                const completedIndexes = new Set(sessionRows.map((row) => row.image_index));
 
                 session.completedImages = Math.min(session.totalImages, completedIndexes.size);
-                session.correctAnswers = rows
-                    .filter((row) => row.session_id === session.id && row.country_answer === true)
+                session.correctAnswers = sessionRows
+                    .filter((row) => row.country_answer === true)
                     .length;
 
                 if (session.completedImages >= session.totalImages) {
                     session.status = 'completed';
                     session.nextImageIndex = 1;
+                    session.completedAt = sessionRows
+                        .map((row) => row.answered_at)
+                        .filter(Boolean)
+                        .sort()
+                        .at(-1) || null;
                     return;
                 }
 
@@ -156,7 +159,7 @@
         async function loadSupabaseProgress() {
             let query = supabaseClient
                 .from('heatmap_results')
-                .select('session_id, image_index, country_answer');
+                .select('session_id, image_index, country_answer, answered_at');
 
             const userId = getSupabaseUserId();
             if (userId) {
@@ -210,6 +213,7 @@
             session.completedImages = 0;
             session.nextImageIndex = 1;
             session.status = 'not_started';
+            session.completedAt = null;
 
             localStorage.removeItem(getCurrentSessionIdKey());
             localStorage.removeItem(getLaunchTokenKey());
@@ -227,6 +231,65 @@
                 return 'Folyamatban';
             }
             return 'Nem kezdett';
+        }
+
+        function getLocalSessionCompletedAt(session) {
+            if (session.completedAt) {
+                return session.completedAt;
+            }
+
+            const parsedIndex = readJson(getResultIndexKey(), []);
+            const index = Array.isArray(parsedIndex) ? parsedIndex : [];
+            const prefix = getResultPrefix(session.id);
+
+            return index
+                .filter((key) => key.startsWith(prefix))
+                .map((key) => readJson(key, null))
+                .filter(Boolean)
+                .map((result) => result.answeredAt)
+                .filter(Boolean)
+                .sort()
+                .at(-1) || null;
+        }
+
+        function formatCompletedDate(completedAt) {
+            if (!completedAt || Number.isNaN(new Date(completedAt).getTime())) {
+                return '';
+            }
+
+            return new Intl.DateTimeFormat('hu-HU', {
+                month: 'short',
+                day: 'numeric'
+            }).format(new Date(completedAt));
+        }
+
+        function isSameLocalDay(firstDate, secondDate = new Date()) {
+            const first = new Date(firstDate);
+
+            if (Number.isNaN(first.getTime())) {
+                return false;
+            }
+
+            return first.getFullYear() === secondDate.getFullYear()
+                && first.getMonth() === secondDate.getMonth()
+                && first.getDate() === secondDate.getDate();
+        }
+
+        function shouldWaitUntilTomorrow(session, sessions, supabaseMode) {
+            if (session.status !== 'not_started') {
+                return false;
+            }
+
+            const previousSession = sessions.find((item) => item.id === session.id - 1);
+            if (!previousSession || previousSession.id === 0 || previousSession.status !== 'completed') {
+                return false;
+            }
+
+            const previousCompletedAt = supabaseMode
+                ? previousSession.completedAt
+                : getLocalSessionCompletedAt(previousSession);
+
+            return isSameLocalDay(previousCompletedAt);
         }
 
         function getLocalCorrectAnswers(sessionId) {
@@ -299,6 +362,7 @@
             session.correctAnswers = getLocalCorrectAnswers(sessionId);
             session.nextImageIndex = 1;
             session.status = 'completed';
+            session.completedAt = new Date().toISOString();
 
             localStorage.removeItem(getCurrentSessionIdKey());
             localStorage.removeItem(getLaunchTokenKey());
@@ -325,17 +389,21 @@
 
             elements.sessionsGrid.innerHTML = '';
             const currentSessionId = getCurrentSessionId(progress.sessions);
+            const supabaseMode = isSupabaseMode();
 
             progress.sessions.forEach((session) => {
                 const card = document.createElement('article');
                 card.className = 'session-card';
                 const isActive = session.id === currentSessionId;
+                const waitUntilTomorrow = shouldWaitUntilTomorrow(session, progress.sessions, supabaseMode);
+                const isSupabaseStartBlocked = supabaseMode && waitUntilTomorrow;
+                const canStart = isActive && !isSupabaseStartBlocked;
                 const isSeparated = session.id >= APP_CONFIG.conditionSeparation;
                 const isPractice = session.id === 0;
-                const resetButtonHtml = isSupabaseMode()
+                const resetButtonHtml = supabaseMode
                     ? ''
                     : '<button class="session-reset-button" type="button">Reset</button>';
-                const skipButtonHtml = isSupabaseMode()
+                const skipButtonHtml = supabaseMode
                     ? ''
                     : '<button class="session-skip-button" type="button">Skip</button>';
 
@@ -347,13 +415,21 @@
                     card.classList.add('session-card-practice');
                 }
 
-                if (!isActive) {
+                if (!canStart) {
                     card.classList.add('session-card-disabled');
                 }
 
                 const statusClass = `status-${session.status}`;
-                const startLabel = session.status === 'in_progress' ? 'Folytatás' : 'Indítás';
-                const correctAnswers = isSupabaseMode() ? (session.correctAnswers || 0) : getLocalCorrectAnswers(session.id);
+                const startLabel = session.status === 'in_progress'
+                    ? 'Folytatás'
+                    : waitUntilTomorrow ? 'Holnap' : 'Indítás';
+                const correctAnswers = supabaseMode ? (session.correctAnswers || 0) : getLocalCorrectAnswers(session.id);
+                const completedAt = supabaseMode
+                    ? session.completedAt
+                    : getLocalSessionCompletedAt(session);
+                const completedDateHtml = session.status === 'completed' && completedAt
+                    ? `<span class="session-completed-date"> &nbsp;&nbsp;${formatCompletedDate(completedAt)}</span>`
+                    : '';
                 const hitCardHtml = session.status === 'not_started'
                     ? ''
                     : `
@@ -365,18 +441,18 @@
 
                 card.innerHTML = `
                     ${hitCardHtml}
-                    <h2>${session.title} <span class="session-status ${statusClass}">&nbsp;&nbsp;&nbsp;${getStatusLabel(session.status)}</span></h2>
+                    <h2>${session.title} <span class="session-status ${statusClass}">&nbsp;&nbsp;&nbsp;${getStatusLabel(session.status)}</span>${completedDateHtml}</h2>
                     <p>${session.completedImages} / ${session.totalImages} kép kész</p>
                     
                     <div class="session-actions">
-                        <button class="session-start-button" type="button" ${isActive ? '' : 'disabled'}>${startLabel}</button>
+                        <button class="session-start-button" type="button" ${canStart ? '' : 'disabled'}>${startLabel}</button>
                         ${skipButtonHtml}
                         ${resetButtonHtml}
                     </div>
                 `;
 
                 card.querySelector('.session-start-button').addEventListener('click', () => {
-                    if (!isActive) {
+                    if (!canStart) {
                         return;
                     }
 

@@ -416,6 +416,13 @@ body:has(.answer-page) {
     font-weight: 700;
 }
 
+.session-completed-date {
+    color: #c8c8c8;
+    font-size: 0.8em;
+    font-weight: 400;
+    white-space: nowrap;
+}
+
 .session-actions {
     display: flex;
     gap: 8px;

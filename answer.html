@@ -291,6 +291,7 @@
             if (completed >= totalImages) {
                 session.status = 'completed';
                 session.nextImageIndex = 1;
+                session.completedAt = new Date().toISOString();
             } else {
                 session.status = 'in_progress';
                 session.nextImageIndex = completed + 1;
