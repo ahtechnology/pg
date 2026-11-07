@@ -422,7 +422,10 @@
                 const statusClass = `status-${session.status}`;
                 const startLabel = session.status === 'in_progress'
                     ? 'Folytatás'
-                    : waitUntilTomorrow ? 'Holnap' : 'Indítás';
+                    : 'Indítás';
+                const statusLabel = waitUntilTomorrow
+                    ? 'Holnap'
+                    : getStatusLabel(session.status);
                 const correctAnswers = supabaseMode ? (session.correctAnswers || 0) : getLocalCorrectAnswers(session.id);
                 const completedAt = supabaseMode
                     ? session.completedAt
@@ -441,7 +444,7 @@
 
                 card.innerHTML = `
                     ${hitCardHtml}
-                    <h2>${session.title} <span class="session-status ${statusClass}">&nbsp;&nbsp;&nbsp;${getStatusLabel(session.status)}</span>${completedDateHtml}</h2>
+                    <h2>${session.title} <span class="session-status ${statusClass}">&nbsp;&nbsp;&nbsp;${statusLabel}</span>${completedDateHtml}</h2>
                     <p>${session.completedImages} / ${session.totalImages} kép kész</p>
                     
                     <div class="session-actions">
